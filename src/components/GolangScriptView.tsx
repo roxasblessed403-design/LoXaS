@@ -210,18 +210,21 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
             </div>
           </div>
 
-          {/* Step 3: Compile and Run */}
+          {/* Step 3: Compile and Install Globally */}
           <div className="bg-zinc-900/90 border border-zinc-800 rounded-lg p-3.5 space-y-2">
             <div className="flex items-center justify-between">
               <span className="font-bold text-emerald-400 text-xs flex items-center gap-2">
                 <span className="w-5 h-5 rounded-full bg-emerald-950 border border-emerald-500 flex items-center justify-center text-[10px]">
                   3
                 </span>
-                Step 3: Compile to High-Speed Binary or Run Directly
+                Step 3: Install Globally as 'loxas' & 'lx' (Run Anywhere!)
               </span>
               <button
                 onClick={() =>
-                  copyToClipboard('go build -ldflags="-s -w" -o loxasb loxasb.go && ./loxasb', 'step3')
+                  copyToClipboard(
+                    'go build -ldflags="-s -w" -o loxasb loxasb.go && cp loxasb $PREFIX/bin/loxas && cp loxasb $PREFIX/bin/lx && chmod +x $PREFIX/bin/loxas $PREFIX/bin/lx && loxas',
+                    'step3'
+                  )
                 }
                 className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition-colors"
               >
@@ -239,16 +242,13 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
               </button>
             </div>
             <p className="text-zinc-400 text-[11px]">
-              Compile into a stripped standalone binary for maximum execution speed:
+              Copy the binary into Termux's global bin directory so you can type <code className="text-emerald-300 font-bold">loxas</code> or <code className="text-emerald-300 font-bold">lx</code> from <b>any directory</b>:
             </p>
             <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-emerald-300 font-mono text-xs select-all">
-              go build -ldflags="-s -w" -o loxasb loxasb.go && ./loxasb
+              go build -ldflags="-s -w" -o loxasb loxasb.go && cp loxasb $PREFIX/bin/loxas && cp loxasb $PREFIX/bin/lx && chmod +x $PREFIX/bin/loxas $PREFIX/bin/lx
             </div>
             <div className="text-[11px] text-zinc-400 pt-1">
-              Or run directly on the fly without compiling:
-            </div>
-            <div className="bg-black/80 border border-zinc-800 rounded p-2 text-zinc-300 font-mono text-xs select-all">
-              go run loxasb.go
+              Now simply type <b className="text-cyan-400">loxas</b> or <b className="text-cyan-400">lx</b> anywhere in Termux!
             </div>
           </div>
 

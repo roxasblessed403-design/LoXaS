@@ -2,6 +2,7 @@
 # ============================================================================
 # LoXaSB PRO 5.4 - AUTOMATED TERMUX INSTALLER SCRIPT
 # Repository: https://github.com/roxasblessed403-design/LoXaS.git
+# Global Commands: 'loxas' and 'lx'
 # ============================================================================
 
 echo -e "\033[1;32m"
@@ -39,12 +40,15 @@ echo -e "\033[1;33m[+] Compiling LoXaSB Pro Supreme standalone binary...\033[0m"
 go build -ldflags="-s -w" -o loxasb loxasb.go
 chmod +x loxasb
 
+# Install globally to $PREFIX/bin as 'loxas' and 'lx'
+echo -e "\033[1;33m[+] Installing global shortcuts: 'loxas' and 'lx'...\033[0m"
+cp loxasb $PREFIX/bin/loxas 2>/dev/null || cp loxasb /data/data/com.termux/files/usr/bin/loxas 2>/dev/null || true
+cp loxasb $PREFIX/bin/lx 2>/dev/null || cp loxasb /data/data/com.termux/files/usr/bin/lx 2>/dev/null || true
+chmod +x $PREFIX/bin/loxas $PREFIX/bin/lx 2>/dev/null || true
+
 echo -e "\033[1;32m[✓] Installation complete!\033[0m"
-echo -e "\033[1;37mRun LoXaSB anytime with:\033[0m"
-echo -e "   \033[1;36m./loxasb\033[0m          (Interactive Menu)"
-echo -e "   \033[1;36m./loxasb -t speed.cloudflare.com -trace\033[0m"
-echo -e "   \033[1;36m./loxasb -cidr 104.16.0.0/24 -w 8\033[0m"
-echo -e "   \033[1;36m./loxasb -f my_hosts.txt -w 10\033[0m"
+echo -e "\033[1;37mYou can now run LoXaSB from ANY directory using:\033[0m"
+echo -e "   \033[1;32mloxas\033[0m   or   \033[1;32mlx\033[0m"
 echo ""
 
-./loxasb
+loxas
