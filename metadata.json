@@ -1,0 +1,6 @@
+{
+  "name": "LoXaSB Network Diagnostic & CDN/SNI Probe",
+  "description": "High-performance network probe tool for ICMP ping, direct connection testing, CIDR scans, packet loss statistics, route hop traceroute, and automatic CDN/SNI directory organization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
