@@ -12,6 +12,11 @@ import {
   Layers,
   Cpu,
   Play,
+  GitBranch,
+  ArrowRight,
+  ExternalLink,
+  ShieldCheck,
+  RefreshCw,
 } from 'lucide-react';
 import type { SupportedLanguage } from '../types.js';
 
@@ -20,17 +25,12 @@ interface GolangScriptViewProps {
 }
 
 export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) => {
-  const [copiedScript, setCopiedScript] = useState(false);
-  const [copiedInstallCmd, setCopiedInstallCmd] = useState(false);
+  const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
 
-  const installCommand = `pkg update -y && pkg install golang git traceroute dnsutils -y && curl -sSL https://raw.githubusercontent.com/.../loxasb.go -o loxasb.go || nano loxasb.go`;
-  const runCommand = `go run loxasb.go`;
-  const buildCommand = `go build -ldflags="-s -w" -o loxasb loxasb.go && ./loxasb`;
-
-  const handleCopyInstall = () => {
-    navigator.clipboard.writeText(`pkg update -y && pkg install golang git -y\ncat << 'EOF' > loxasb.go\n// paste code\nEOF\ngo run loxasb.go`);
-    setCopiedInstallCmd(true);
-    setTimeout(() => setCopiedInstallCmd(false), 2500);
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedIndex(key);
+    setTimeout(() => setCopiedIndex(null), 2000);
   };
 
   const handleDownloadGoFile = async () => {
@@ -107,53 +107,185 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
         </div>
       </div>
 
-      {/* 3 Step Termux Quickstart Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Step 1 */}
-        <div className="bg-zinc-950 border border-zinc-800/90 rounded-xl p-4 space-y-2">
-          <div className="flex items-center gap-2 text-teal-400 font-bold text-xs">
-            <span className="w-5 h-5 rounded-full bg-teal-950 border border-teal-600 flex items-center justify-center text-[10px]">
-              1
-            </span>
-            <span>Install Go in Termux</span>
+      {/* GitHub to Termux Complete Step-by-Step Guide */}
+      <div className="bg-zinc-950 border border-teal-900/60 rounded-xl p-5 shadow-2xl space-y-4">
+        <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+          <div className="flex items-center gap-2.5">
+            <div className="p-1.5 rounded bg-teal-500/20 text-teal-400 border border-teal-500/30">
+              <GitBranch className="w-5 h-5" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-zinc-100 uppercase tracking-wide">
+                How to Import & Run from GitHub in Termux
+              </h3>
+              <p className="text-[11px] text-zinc-400">
+                Follow these 4 simple steps in Termux on your Android phone
+              </p>
+            </div>
           </div>
-          <p className="text-zinc-400 text-[11px]">
-            Open Termux on Android and install the Golang compiler and tools:
-          </p>
-          <div className="bg-zinc-900 border border-zinc-800 rounded p-2 text-[11px] text-zinc-200 font-mono select-all">
-            pkg update -y && pkg install golang git -y
-          </div>
+          <span className="text-[10px] px-2 py-0.5 rounded bg-zinc-900 text-zinc-300 border border-zinc-800">
+            Termux Guide
+          </span>
         </div>
 
-        {/* Step 2 */}
-        <div className="bg-zinc-950 border border-zinc-800/90 rounded-xl p-4 space-y-2">
-          <div className="flex items-center gap-2 text-cyan-400 font-bold text-xs">
-            <span className="w-5 h-5 rounded-full bg-cyan-950 border border-cyan-600 flex items-center justify-center text-[10px]">
-              2
-            </span>
-            <span>Save & Compile</span>
+        <div className="space-y-4">
+          {/* Step 1: Update & Install Git & Go */}
+          <div className="bg-zinc-900/90 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-teal-400 text-xs flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-teal-950 border border-teal-500 flex items-center justify-center text-[10px]">
+                  1
+                </span>
+                Step 1: Install Git and Golang in Termux
+              </span>
+              <button
+                onClick={() =>
+                  copyToClipboard('pkg update -y && pkg install git golang -y', 'step1')
+                }
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition-colors"
+              >
+                {copiedIndex === 'step1' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-zinc-400 text-[11px]">
+              Open Termux and run this command to update packages and install git + go:
+            </p>
+            <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-teal-300 font-mono text-xs select-all">
+              pkg update -y && pkg install git golang -y
+            </div>
           </div>
-          <p className="text-zinc-400 text-[11px]">
-            Save <code className="text-teal-300">loxasb.go</code> and build a fast native binary:
-          </p>
-          <div className="bg-zinc-900 border border-zinc-800 rounded p-2 text-[11px] text-zinc-200 font-mono select-all">
-            go build -ldflags="-s -w" -o loxasb loxasb.go
-          </div>
-        </div>
 
-        {/* Step 3 */}
-        <div className="bg-zinc-950 border border-zinc-800/90 rounded-xl p-4 space-y-2">
-          <div className="flex items-center gap-2 text-emerald-400 font-bold text-xs">
-            <span className="w-5 h-5 rounded-full bg-emerald-950 border border-emerald-600 flex items-center justify-center text-[10px]">
-              3
-            </span>
-            <span>Launch LoXaSB</span>
+          {/* Step 2: Clone from GitHub */}
+          <div className="bg-zinc-900/90 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-cyan-400 text-xs flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-cyan-950 border border-cyan-500 flex items-center justify-center text-[10px]">
+                  2
+                </span>
+                Step 2: Clone Repository or Download Script
+              </span>
+              <button
+                onClick={() =>
+                  copyToClipboard(
+                    'git clone https://github.com/username/LoXaSB.git\ncd LoXaSB',
+                    'step2'
+                  )
+                }
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition-colors"
+              >
+                {copiedIndex === 'step2' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-zinc-400 text-[11px]">
+              Clone your repository from GitHub into Termux and navigate into the directory:
+            </p>
+            <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-cyan-300 font-mono text-xs select-all">
+              git clone https://github.com/username/LoXaSB.git && cd LoXaSB
+            </div>
+            <div className="text-[11px] text-zinc-400 pt-1">
+              <span className="text-amber-400 font-bold">Alternative (Single File):</span> If you only want the script directly without full git repo:
+            </div>
+            <div className="bg-black/80 border border-zinc-800 rounded p-2 text-zinc-300 font-mono text-xs select-all">
+              curl -sSL -O https://raw.githubusercontent.com/username/LoXaSB/main/loxasb.go
+            </div>
           </div>
-          <p className="text-zinc-400 text-[11px]">
-            Run interactive menu or single-command scans:
-          </p>
-          <div className="bg-zinc-900 border border-zinc-800 rounded p-2 text-[11px] text-zinc-200 font-mono select-all">
-            ./loxasb
+
+          {/* Step 3: Compile and Run */}
+          <div className="bg-zinc-900/90 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-emerald-400 text-xs flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-emerald-950 border border-emerald-500 flex items-center justify-center text-[10px]">
+                  3
+                </span>
+                Step 3: Compile to High-Speed Binary or Run Directly
+              </span>
+              <button
+                onClick={() =>
+                  copyToClipboard('go build -ldflags="-s -w" -o loxasb loxasb.go && ./loxasb', 'step3')
+                }
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition-colors"
+              >
+                {copiedIndex === 'step3' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-zinc-400 text-[11px]">
+              Compile into a stripped standalone binary for maximum execution speed:
+            </p>
+            <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-emerald-300 font-mono text-xs select-all">
+              go build -ldflags="-s -w" -o loxasb loxasb.go && ./loxasb
+            </div>
+            <div className="text-[11px] text-zinc-400 pt-1">
+              Or run directly on the fly without compiling:
+            </div>
+            <div className="bg-black/80 border border-zinc-800 rounded p-2 text-zinc-300 font-mono text-xs select-all">
+              go run loxasb.go
+            </div>
+          </div>
+
+          {/* Step 4: Updating from GitHub */}
+          <div className="bg-zinc-900/90 border border-zinc-800 rounded-lg p-3.5 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-purple-400 text-xs flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-purple-950 border border-purple-500 flex items-center justify-center text-[10px]">
+                  4
+                </span>
+                Step 4: Update to Latest Version in Future
+              </span>
+              <button
+                onClick={() =>
+                  copyToClipboard('cd LoXaSB && git pull && go build -ldflags="-s -w" -o loxasb loxasb.go', 'step4')
+                }
+                className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition-colors"
+              >
+                {copiedIndex === 'step4' ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-emerald-400">Copied!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Copy</span>
+                  </>
+                )}
+              </button>
+            </div>
+            <p className="text-zinc-400 text-[11px]">
+              Whenever new updates are pushed to GitHub, pull changes with a single command:
+            </p>
+            <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-purple-300 font-mono text-xs select-all">
+              cd LoXaSB && git pull && go build -ldflags="-s -w" -o loxasb loxasb.go
+            </div>
           </div>
         </div>
       </div>
