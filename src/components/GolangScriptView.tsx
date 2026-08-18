@@ -177,7 +177,7 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
               <button
                 onClick={() =>
                   copyToClipboard(
-                    'git clone https://github.com/username/LoXaSB.git\ncd LoXaSB',
+                    'git clone https://github.com/roxasblessed403-design/LoXaS.git\ncd LoXaS',
                     'step2'
                   )
                 }
@@ -200,13 +200,13 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
               Clone your repository from GitHub into Termux and navigate into the directory:
             </p>
             <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-cyan-300 font-mono text-xs select-all">
-              git clone https://github.com/username/LoXaSB.git && cd LoXaSB
+              git clone https://github.com/roxasblessed403-design/LoXaS.git && cd LoXaS
             </div>
             <div className="text-[11px] text-zinc-400 pt-1">
               <span className="text-amber-400 font-bold">Alternative (Single File):</span> If you only want the script directly without full git repo:
             </div>
             <div className="bg-black/80 border border-zinc-800 rounded p-2 text-zinc-300 font-mono text-xs select-all">
-              curl -sSL -O https://raw.githubusercontent.com/username/LoXaSB/main/loxasb.go
+              curl -sSL -O https://raw.githubusercontent.com/roxasblessed403-design/LoXaS/main/loxasb.go
             </div>
           </div>
 
@@ -263,7 +263,7 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
               </span>
               <button
                 onClick={() =>
-                  copyToClipboard('cd LoXaSB && git pull && go build -ldflags="-s -w" -o loxasb loxasb.go', 'step4')
+                  copyToClipboard('cd LoXaS && git pull && go build -ldflags="-s -w" -o loxasb loxasb.go', 'step4')
                 }
                 className="flex items-center gap-1 px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-[11px] transition-colors"
               >
@@ -284,7 +284,7 @@ export const GolangScriptView: React.FC<GolangScriptViewProps> = ({ language }) 
               Whenever new updates are pushed to GitHub, pull changes with a single command:
             </p>
             <div className="bg-black/80 border border-zinc-800 rounded p-2.5 text-purple-300 font-mono text-xs select-all">
-              cd LoXaSB && git pull && go build -ldflags="-s -w" -o loxasb loxasb.go
+              cd LoXaS && git pull && go build -ldflags="-s -w" -o loxasb loxasb.go
             </div>
           </div>
         </div>

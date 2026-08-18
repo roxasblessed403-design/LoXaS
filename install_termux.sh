@@ -1,6 +1,7 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
 # LoXaSB PRO 5.4 - AUTOMATED TERMUX INSTALLER SCRIPT
+# Repository: https://github.com/roxasblessed403-design/LoXaS.git
 # ============================================================================
 
 echo -e "\033[1;32m"
@@ -10,7 +11,7 @@ echo " | |   / _ \  \  / / _\` \___ \|  _ \ "
 echo " | |__| (_) | /  \| (_| |___) | |_) |"
 echo " |_____\___/ /_/\_\\__,_|____/|____/ "
 echo -e "\033[0m"
-echo -e "\033[1;36m[+] Setting up Go environment for LoXaSB in Termux...\033[0m"
+echo -e "\033[1;36m[+] Setting up Go & Git environment for LoXaSB in Termux...\033[0m"
 
 pkg update -y
 pkg install golang git traceroute dnsutils -y
@@ -21,6 +22,17 @@ if command -v go >/dev/null 2>&1; then
 else
     echo -e "\033[1;31m[✗] Go installation failed. Please run: pkg install golang\033[0m"
     exit 1
+fi
+
+# Fetch repository or script if not present
+if [ ! -f "loxasb.go" ]; then
+    echo -e "\033[1;33m[+] Fetching LoXaSB from GitHub (roxasblessed403-design/LoXaS)...\033[0m"
+    if [ -d ".git" ]; then
+        git pull
+    else
+        git clone https://github.com/roxasblessed403-design/LoXaS.git
+        cd LoXaS 2>/dev/null || true
+    fi
 fi
 
 echo -e "\033[1;33m[+] Compiling LoXaSB Pro Supreme standalone binary...\033[0m"
