@@ -1,6 +1,6 @@
 {
   "name": "LoXaSB Network Diagnostic & CDN/SNI Probe",
-  "description": "High-performance network probe tool for ICMP ping, direct connection testing, CIDR scans, packet loss statistics, route hop traceroute, and automatic CDN/SNI directory organization.",
+  "description": "High-performance bugscan-x cyber engine written in pure Go for Termux and Web: direct HTTP/2 probing, crt.sh subfinder scraper, proxy checking, WebSocket 101 upgrade testing, CIDR calculation, and CDN/SNI diagnostics.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1217,10 +1217,11 @@ export async function inspectHostTlsInfo(target: string): Promise<{
             sanList = cert.subjectaltname.split(',').map((s) => s.trim().replace(/^DNS:/i, ''));
           }
 
+          const issuerOrg = Array.isArray(cert.issuer?.O) ? cert.issuer.O.join(' ') : (cert.issuer?.O || '');
           const isWildcard = sanList.some((s) => s.startsWith('*.'));
           const isFrontable =
             sanList.length > 3 ||
-            (cert.issuer?.O && /cloudflare|amazon|fastly|google/i.test(cert.issuer.O));
+            (Boolean(issuerOrg) && /cloudflare|amazon|fastly|google/i.test(issuerOrg));
 
           let daysRemaining = 0;
           if (cert.valid_to) {

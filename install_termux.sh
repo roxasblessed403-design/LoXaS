@@ -1,6 +1,6 @@
 #!/data/data/com.termux/files/usr/bin/bash
 # ============================================================================
-# LoXaSB PRO 5.4 - AUTOMATED TERMUX INSTALLER SCRIPT
+# LoXaSB PRO 5.5 - BUGSCAN-X NATIVE GO ENGINE (AUTOMATED TERMUX INSTALLER)
 # Repository: https://github.com/roxasblessed403-design/LoXaS.git
 # Global Commands: 'loxas' and 'lx'
 # ============================================================================
