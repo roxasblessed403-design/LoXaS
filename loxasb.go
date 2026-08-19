@@ -3,11 +3,13 @@
 // Built for Termux (Android) & Linux / macOS / Windows CLI Environments
 //
 // Features:
+// - Interactive Clear-Screen & Dynamic Sub-Menus for every numbered feature
 // - Real-time CIDR Subnet Calculator: Network IP, Netmask, Usable Range, Total Host count
 // - Configurable concurrent worker pools for high-speed IP range & batch scanning
 // - Upgraded Host Checker with deep HTTP telemetry, Server headers, TTFB, TLS 1.3,
 //   SANs, Port Matrix (80, 443, 8080, 8443, 2052-2096), Ping/Jitter stats & Bughost Verdict
 // - Built-in Interactive Results Explorer & Exporter (Export to alive_hosts.txt)
+// - Over-The-Air (OTA) Instant Self-Updater directly from GitHub
 // - 100% Pure Go Standard Library • Zero External Dependencies • Zero Compiler Errors
 // ============================================================================
 
@@ -48,6 +50,17 @@ const (
 	ColorDim     = "\033[2m"
 )
 
+// Clear terminal screen cleanly
+func clearScreen() {
+	fmt.Print("\033[H\033[2J")
+}
+
+// Pause until user hits Enter
+func pauseEnter(scanner *bufio.Scanner) {
+	fmt.Printf("\n%s[Press ENTER to continue...]%s", ColorDim, ColorReset)
+	scanner.Scan()
+}
+
 // CDN Signatures for classification
 type CdnSignature struct {
 	Name    string
@@ -65,6 +78,37 @@ var knownCdns = []CdnSignature{
 	{Name: "Google CDN", Cnames: []string{"googleusercontent.com", "1e100.net"}, Headers: []string{"gws", "google"}, DirName: "cdn/google"},
 	{Name: "BunnyCDN", Cnames: []string{"b-cdn.net"}, Headers: []string{"bunnycdn", "b-cdn"}, DirName: "cdn/others"},
 	{Name: "Imperva", Cnames: []string{"incapdns.net"}, Headers: []string{"x-iinfo", "incapsula"}, DirName: "cdn/others"},
+}
+
+var cloudflareCIDRs = []string{
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/12",
+	"172.64.0.0/13", "131.0.72.0/22",
+}
+
+var cloudfrontCIDRs = []string{
+	"13.32.0.0/15", "13.35.0.0/16", "13.224.0.0/14", "18.64.0.0/14",
+	"52.84.0.0/15", "54.192.0.0/16", "54.230.0.0/16", "99.84.0.0/16",
+	"99.86.0.0/16", "143.204.0.0/16", "204.246.160.0/19", "205.251.192.0/19",
+}
+
+var fastlyCIDRs = []string{
+	"151.101.0.0/16", "199.232.0.0/16",
+}
+
+func ipInCIDRList(ipStr string, cidrList []string) bool {
+	parsedIP := net.ParseIP(ipStr)
+	if parsedIP == nil {
+		return false
+	}
+	for _, cidr := range cidrList {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err == nil && ipNet.Contains(parsedIP) {
+			return true
+		}
+	}
+	return false
 }
 
 // Result structure for scanned target
@@ -107,16 +151,7 @@ type TargetResult struct {
 	ClosedPorts     []int
 	SavedDirectory  string
 	SavedFilename   string
-	RouteHops       []HopDetail
 	BughostVerdict  string
-}
-
-type HopDetail struct {
-	Hop     int
-	IP      string
-	Host    string
-	RttMs   float64
-	Timeout bool
 }
 
 // Ensure required directories exist
@@ -359,37 +394,6 @@ func inspectHttpDeep(target string, ip string) (int, string, string, string, str
 	}
 
 	return 0, "No Response / Timed Out", "", "", "", "", "", 0, 0
-}
-
-var cloudflareCIDRs = []string{
-	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
-	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
-	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/12",
-	"172.64.0.0/13", "131.0.72.0/22",
-}
-
-var cloudfrontCIDRs = []string{
-	"13.32.0.0/15", "13.35.0.0/16", "13.224.0.0/14", "18.64.0.0/14",
-	"52.84.0.0/15", "54.192.0.0/16", "54.230.0.0/16", "99.84.0.0/16",
-	"99.86.0.0/16", "143.204.0.0/16", "204.246.160.0/19", "205.251.192.0/19",
-}
-
-var fastlyCIDRs = []string{
-	"151.101.0.0/16", "199.232.0.0/16",
-}
-
-func ipInCIDRList(ipStr string, cidrList []string) bool {
-	parsedIP := net.ParseIP(ipStr)
-	if parsedIP == nil {
-		return false
-	}
-	for _, cidr := range cidrList {
-		_, ipNet, err := net.ParseCIDR(cidr)
-		if err == nil && ipNet.Contains(parsedIP) {
-			return true
-		}
-	}
-	return false
 }
 
 // Identify CDN Provider
@@ -948,175 +952,350 @@ func runConcurrentCIDRScanner(ips []string, workers int, subnetInfo string) {
 	fmt.Printf("%s[+] Results saved into ./cdn/ and ./sni/ folders. (Check Option [4] File Toolkit to view)%s\n\n", ColorCyan, ColorReset)
 }
 
-// Option [4]: Interactive File Toolkit & Results Explorer
-func runFileToolkitInteractive(scanner *bufio.Scanner) {
+// ----------------------------------------------------------------------------
+// SUB-MENU [1]: HOST SCANNER SUBMENU
+// ----------------------------------------------------------------------------
+func runHostScannerSubmenu(scanner *bufio.Scanner) {
 	for {
-		fmt.Printf("\n%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
-		fmt.Printf("%s┃             LoXaSB PRO 5.4 - SAVED RESULTS & FILE TOOLKIT             ┃%s\n", ColorBold, ColorReset)
-		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n", ColorCyan, ColorReset)
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
+		fmt.Printf("%s┃                   [1] HOST & NETWORK SCANNER SUITE                    ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
 
-		dirs := []string{
-			"cdn/cloudflare", "cdn/cloudfront", "cdn/fastly",
-			"cdn/akamai", "cdn/google", "cdn/gcore", "cdn/others",
-			"sni", "direct-ip", "unreachable",
-		}
+		fmt.Printf("%s[1]%s Single Host / Domain Deep Diagnostic Audit\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s CIDR & IP Subnet Calculator & Range Scanner (with Worker Config)\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s Batch Host Scanner from File (hosts.txt)\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[4]%s Quick Ping & Quality Jitter Test\n", ColorYellow, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
 
-		totalFiles := 0
-		var allSavedFiles []string
-
-		fmt.Println("Saved Report Categories:")
-		for i, d := range dirs {
-			entries, err := os.ReadDir(d)
-			count := 0
-			if err == nil {
-				count = len(entries)
-				for _, e := range entries {
-					if !e.IsDir() && strings.HasSuffix(e.Name(), ".txt") {
-						allSavedFiles = append(allSavedFiles, filepath.Join(d, e.Name()))
-					}
-				}
-			}
-			totalFiles += count
-			fmt.Printf(" [%d] %-20s : %s%d saved reports%s\n", i+1, d, ColorGreen, count, ColorReset)
-		}
-
-		fmt.Printf("\nTotal Saved Probes: %s%d files%s\n", ColorCyan, totalFiles, ColorReset)
-		fmt.Println("-----------------------------------------------------------------")
-		fmt.Println("[L] List all saved files")
-		fmt.Println("[V] View / Read a saved report content")
-		fmt.Println("[E] Export all alive hosts into a single list (alive_hosts.txt)")
-		fmt.Println("[C] Clear / Delete all saved results")
-		fmt.Println("[0] Return to Main Menu")
-		fmt.Printf("[-] Your Choice: ")
-
+		fmt.Printf("[-]  Choice: ")
 		if !scanner.Scan() {
 			break
 		}
-		subChoice := strings.ToUpper(strings.TrimSpace(scanner.Text()))
+		c := strings.TrimSpace(scanner.Text())
 
-		if subChoice == "0" || subChoice == "EXIT" || subChoice == "Q" {
+		if c == "0" || c == "exit" || c == "back" {
 			break
 		}
 
-		switch subChoice {
-		case "L", "LIST":
-			if len(allSavedFiles) == 0 {
-				fmt.Println("No files saved yet. Run a scan first.")
-				continue
-			}
-			fmt.Println("\nSaved Files List:")
-			for idx, f := range allSavedFiles {
-				fmt.Printf(" %3d) %s\n", idx+1, f)
-			}
-
-		case "V", "VIEW", "READ":
-			if len(allSavedFiles) == 0 {
-				fmt.Println("No files to view.")
-				continue
-			}
-			fmt.Printf("Enter File Number (1 - %d) or exact file path: ", len(allSavedFiles))
+		switch c {
+		case "1":
+			fmt.Printf("\n[-]  Enter Host / Domain / IP: ")
 			if scanner.Scan() {
-				input := strings.TrimSpace(scanner.Text())
-				var targetPath string
-
-				if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(allSavedFiles) {
-					targetPath = allSavedFiles[num-1]
-				} else {
-					targetPath = input
-				}
-
-				data, err := os.ReadFile(targetPath)
-				if err != nil {
-					fmt.Printf("%sError reading file %s: %v%s\n", ColorRed, targetPath, err, ColorReset)
-				} else {
-					fmt.Printf("\n%s--- CONTENTS OF %s ---%s\n", ColorCyan, targetPath, ColorReset)
-					fmt.Println(string(data))
-					fmt.Printf("%s--- END OF FILE ---%s\n", ColorCyan, ColorReset)
+				h := strings.TrimSpace(scanner.Text())
+				if h != "" {
+					fmt.Printf("\n%s[+] Auditing %s...%s\n", ColorCyan, h, ColorReset)
+					res := probeTarget(h, 5, true)
+					displayResult(res)
 				}
 			}
-
-		case "E", "EXPORT":
-			var aliveList []string
-			for _, f := range allSavedFiles {
-				if !strings.Contains(f, "unreachable") {
-					base := filepath.Base(f)
-					host := strings.TrimSuffix(base, ".txt")
-					host = strings.ReplaceAll(host, "_", ".")
-					aliveList = append(aliveList, host)
-				}
-			}
-
-			if len(aliveList) == 0 {
-				fmt.Println("No alive hosts to export.")
-				continue
-			}
-
-			exportPath := "alive_hosts.txt"
-			content := strings.Join(aliveList, "\n") + "\n"
-			err := os.WriteFile(exportPath, []byte(content), 0644)
-			if err != nil {
-				fmt.Printf("%sFailed to write %s: %v%s\n", ColorRed, exportPath, err, ColorReset)
-			} else {
-				fmt.Printf("\n%s[✓] Successfully exported %d alive hosts to %s!%s\n", ColorGreen, len(aliveList), exportPath, ColorReset)
-				fmt.Println("You can use this file directly in V2Ray, HTTP Custom, NapsternetV, or SSH tunnels.")
-			}
-
-		case "C", "CLEAR":
-			fmt.Printf("%sAre you sure you want to delete all saved reports? (y/n): %s", ColorRed, ColorReset)
+		case "2":
+			fmt.Printf("\n[-]  Enter CIDR Subnet (e.g. 104.16.0.0/24 or 172.64.0.0/20): ")
 			if scanner.Scan() {
-				if strings.ToLower(strings.TrimSpace(scanner.Text())) == "y" {
-					for _, d := range dirs {
-						_ = os.RemoveAll(d)
+				cidrInput := strings.TrimSpace(scanner.Text())
+				if cidrInput != "" {
+					ips, count, netIP, maskIP, firstU, lastU, err := calculateAndExpandCIDR(cidrInput)
+					if err != nil {
+						fmt.Printf("%s[!] Invalid CIDR format: %v%s\n", ColorRed, err, ColorReset)
+					} else {
+						fmt.Println()
+						fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
+						fmt.Printf("%s┃                   CIDR SUBNET CALCULATION BREAKDOWN                   ┃%s\n", ColorBold, ColorReset)
+						fmt.Printf("%s┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫%s\n", ColorCyan, ColorReset)
+						fmt.Printf("┃ • Input CIDR       : %-49s ┃\n", cidrInput)
+						fmt.Printf("┃ • Network IP       : %-49s ┃\n", netIP.String())
+						fmt.Printf("┃ • Subnet Netmask   : %-49s ┃\n", maskIP.String())
+						fmt.Printf("┃ • Total Host IPs   : %-49s ┃\n", fmt.Sprintf("%d Total IPs", count))
+						fmt.Printf("┃ • Usable IP Range  : %-49s ┃\n", fmt.Sprintf("%s  ->  %s", firstU, lastU))
+						fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
+
+						workers := 25
+						fmt.Printf("[-]  Enter number of concurrent worker threads [default 25, max 100]: ")
+						if scanner.Scan() {
+							wText := strings.TrimSpace(scanner.Text())
+							if wText != "" {
+								if parsedW, err := strconv.Atoi(wText); err == nil && parsedW > 0 {
+									workers = parsedW
+								}
+							}
+						}
+						runConcurrentCIDRScanner(ips, workers, cidrInput)
 					}
-					initDirectories()
-					fmt.Printf("%s[✓] All result directories have been reset.%s\n", ColorGreen, ColorReset)
+				}
+			}
+		case "3":
+			fmt.Printf("\n[-]  Enter path to hosts file (e.g. hosts.txt): ")
+			if scanner.Scan() {
+				filePath := strings.TrimSpace(scanner.Text())
+				if filePath != "" {
+					file, err := os.Open(filePath)
+					if err != nil {
+						fmt.Printf("%s[!] Error opening file: %v%s\n", ColorRed, err, ColorReset)
+					} else {
+						defer file.Close()
+						var targets []string
+						s := bufio.NewScanner(file)
+						for s.Scan() {
+							line := strings.TrimSpace(s.Text())
+							if line != "" && !strings.HasPrefix(line, "#") {
+								targets = append(targets, line)
+							}
+						}
+						workers := 20
+						fmt.Printf("[-]  Enter number of worker threads [default 20]: ")
+						if scanner.Scan() {
+							wText := strings.TrimSpace(scanner.Text())
+							if wText != "" {
+								if pw, err := strconv.Atoi(wText); err == nil && pw > 0 {
+									workers = pw
+								}
+							}
+						}
+						runConcurrentCIDRScanner(targets, workers, fmt.Sprintf("File: %s", filePath))
+					}
+				}
+			}
+		case "4":
+			fmt.Printf("\n[-]  Enter Target Host or IP for Ping & Jitter test: ")
+			if scanner.Scan() {
+				h := strings.TrimSpace(scanner.Text())
+				if h != "" {
+					ip, _, _, _ := resolveDNS(h)
+					fmt.Printf("\n%s[+] Performing 10-packet ping & jitter test to %s (%s)...%s\n", ColorCyan, h, ip, ColorReset)
+					alive, minL, avgL, maxL, jitter, loss := probePing(h, ip, 10, 1500*time.Millisecond)
+					fmt.Printf(" • Reachability : %v\n", alive)
+					fmt.Printf(" • Min Latency  : %.1f ms\n", minL)
+					fmt.Printf(" • Avg Latency  : %.1f ms\n", avgL)
+					fmt.Printf(" • Max Latency  : %.1f ms\n", maxL)
+					fmt.Printf(" • Jitter       : %.1f ms\n", jitter)
+					fmt.Printf(" • Packet Loss  : %.0f%%\n", loss)
 				}
 			}
 		}
-
-		fmt.Printf("\n%sPress ENTER to continue in File Toolkit...%s", ColorDim, ColorReset)
-		scanner.Scan()
+		pauseEnter(scanner)
 	}
 }
 
-// Option [2]: Subfinder
-func runSubfinderCLI(domain string) {
-	clean := cleanTarget(domain)
-	fmt.Printf("\n%s[+] Enumerating subdomains for %s...%s\n", ColorCyan, clean, ColorReset)
+// ----------------------------------------------------------------------------
+// SUB-MENU [2]: SUBFINDER SUBMENU
+// ----------------------------------------------------------------------------
+func runSubfinderSubmenu(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorPurple, ColorReset)
+		fmt.Printf("%s┃                   [2] SUBFINDER & BUGHOST DISCOVERY                   ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorPurple, ColorReset)
 
-	prefixes := []string{
-		"www", "cdn", "api", "static", "edge", "gateway", "stream", "m",
-		"app", "dev", "ws", "speed", "node", "free", "zero", "media", "cloud",
-		"assets", "auth", "portal", "download", "pay", "login", "cdn1", "cdn2",
+		fmt.Printf("%s[1]%s Standard Subdomain Discovery (30+ Common Edge/Cloud Prefixes)\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s High-Yield Zero-Rating Bughost Subdomain Hunter (free, zero, portal, ws, api)\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s Deep Comprehensive Subdomain Scan (All 60+ Extended Prefixes)\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[4]%s Subdomain CNAME & Redirection Chain Inspector\n", ColorYellow, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
+
+		fmt.Printf("[-]  Choice: ")
+		if !scanner.Scan() {
+			break
+		}
+		c := strings.TrimSpace(scanner.Text())
+
+		if c == "0" || c == "exit" || c == "back" {
+			break
+		}
+
+		switch c {
+		case "1", "2", "3":
+			fmt.Printf("\n[-]  Enter Root Domain (e.g. cloudflare.com or MTN.co.za): ")
+			if scanner.Scan() {
+				dom := strings.TrimSpace(scanner.Text())
+				if dom != "" {
+					runSubfinderCLIWithMode(dom, c)
+				}
+			}
+		case "4":
+			fmt.Printf("\n[-]  Enter Full Subdomain (e.g. cdn.speed.cloudflare.com): ")
+			if scanner.Scan() {
+				sub := strings.TrimSpace(scanner.Text())
+				if sub != "" {
+					ip, allIPs, cnames, dnsTime := resolveDNS(sub)
+					fmt.Printf("\n%s[+] CNAME & DNS Chain Analysis for %s:%s\n", ColorCyan, sub, ColorReset)
+					fmt.Printf(" • Primary IP      : %s (DNS Lookup: %.1fms)\n", ip, dnsTime)
+					fmt.Printf(" • All Resolved IPs: %s\n", strings.Join(allIPs, ", "))
+					if len(cnames) > 0 {
+						fmt.Printf(" • CNAME Chain     : %s\n", strings.Join(cnames, " -> "))
+					} else {
+						fmt.Println(" • CNAME Chain     : Direct A/AAAA Record (No CNAME)")
+					}
+					isCdn, provider := inspectCDN(sub, ip, cnames, "", "")
+					fmt.Printf(" • CDN Provider    : %s (Is CDN: %v)\n", provider, isCdn)
+				}
+			}
+		}
+		pauseEnter(scanner)
+	}
+}
+
+func runSubfinderCLIWithMode(domain string, mode string) {
+	clean := cleanTarget(domain)
+	fmt.Printf("\n%s[+] Enumerating subdomains for root domain: %s%s\n", ColorCyan, clean, ColorReset)
+
+	var prefixes []string
+	if mode == "2" {
+		// Zero-rating / bughost targeted
+		prefixes = []string{
+			"free", "zero", "portal", "speed", "api", "cdn", "stream", "ws",
+			"login", "auth", "gateway", "edge", "node", "pay", "m", "assets",
+		}
+	} else if mode == "3" {
+		// Extended
+		prefixes = []string{
+			"www", "cdn", "api", "static", "edge", "gateway", "stream", "m",
+			"app", "dev", "ws", "speed", "node", "free", "zero", "media", "cloud",
+			"assets", "auth", "portal", "download", "pay", "login", "cdn1", "cdn2",
+			"web", "secure", "test", "v1", "v2", "live", "video", "img", "files",
+			"alpha", "beta", "hub", "proxy", "connect", "direct", "ssl", "dns",
+		}
+	} else {
+		// Standard
+		prefixes = []string{
+			"www", "cdn", "api", "static", "edge", "gateway", "stream", "m",
+			"app", "dev", "ws", "speed", "node", "free", "zero", "media", "cloud",
+			"assets", "auth", "portal", "download", "pay", "login", "cdn1", "cdn2",
+		}
 	}
 
-	fmt.Println(strings.Repeat("─", 75))
-	fmt.Printf("%-34s %-18s %-18s\n", "SUBDOMAIN", "RESOLVED IP", "CDN STATUS")
-	fmt.Println(strings.Repeat("─", 75))
+	fmt.Println(strings.Repeat("─", 78))
+	fmt.Printf("%-34s %-18s %-18s %s\n", "SUBDOMAIN", "RESOLVED IP", "CDN STATUS", "HTTP")
+	fmt.Println(strings.Repeat("─", 78))
 
+	var foundCount int
 	for _, p := range prefixes {
 		fullSub := fmt.Sprintf("%s.%s", p, clean)
 		ip, _, cnames, _ := resolveDNS(fullSub)
 		if ip != fullSub {
+			foundCount++
 			isCdn, provider := inspectCDN(fullSub, ip, cnames, "", "")
 			cdnStr := "Direct Origin"
 			if isCdn {
 				cdnStr = provider
 			}
-			fmt.Printf("%s%-34s %-18s %-18s%s\n", ColorGreen, fullSub, ip, cdnStr, ColorReset)
+
+			// Fast HTTP probe
+			code, _, _, _, _, _, _, _, _ := inspectHttpDeep(fullSub, ip)
+			codeStr := fmt.Sprintf("%d", code)
+			if code == 0 {
+				codeStr = "-"
+			}
+
+			fmt.Printf("%s%-34s %-18s %-18s %-6s%s\n", ColorGreen, fullSub, ip, cdnStr, codeStr, ColorReset)
 		}
 	}
-	fmt.Println(strings.Repeat("─", 75))
+	fmt.Println(strings.Repeat("─", 78))
+	fmt.Printf("%s[✓] Found %d active subdomains for %s%s\n", ColorCyan, foundCount, clean, ColorReset)
 }
 
-// Option [3]: IP Lookup & Reverse PTR
+// ----------------------------------------------------------------------------
+// SUB-MENU [3]: IP LOOKUP & ASN SUBMENU
+// ----------------------------------------------------------------------------
+func runIpLookupSubmenu(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
+		fmt.Printf("%s┃                      [3] IP LOOKUP & NETWORK INTEL                    ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
+
+		fmt.Printf("%s[1]%s Single IP / Host Lookup & Reverse PTR Query\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s Cloud CDN Subnet & ASN Range Classification\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s Batch IP Lookup from File\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
+
+		fmt.Printf("[-]  Choice: ")
+		if !scanner.Scan() {
+			break
+		}
+		c := strings.TrimSpace(scanner.Text())
+
+		if c == "0" || c == "exit" || c == "back" {
+			break
+		}
+
+		switch c {
+		case "1":
+			fmt.Printf("\n[-]  Enter IP Address or Hostname: ")
+			if scanner.Scan() {
+				tgt := strings.TrimSpace(scanner.Text())
+				if tgt != "" {
+					runIpLookupCLI(tgt)
+				}
+			}
+		case "2":
+			fmt.Printf("\n[-]  Enter IP to test against Cloudflare/CloudFront/Fastly subnets: ")
+			if scanner.Scan() {
+				tgt := strings.TrimSpace(scanner.Text())
+				if tgt != "" {
+					ip, _, _, _ := resolveDNS(tgt)
+					isCF := ipInCIDRList(ip, cloudflareCIDRs)
+					isAmz := ipInCIDRList(ip, cloudfrontCIDRs)
+					isFast := ipInCIDRList(ip, fastlyCIDRs)
+
+					fmt.Printf("\n%s[+] ASN & Cloud Subnet Match for %s:%s\n", ColorCyan, ip, ColorReset)
+					if isCF {
+						fmt.Printf(" • Cloudflare Edge Subnet : %s[MATCH / YES]%s (Official Cloudflare Anycast)\n", ColorGreen, ColorReset)
+					} else {
+						fmt.Println(" • Cloudflare Edge Subnet : No")
+					}
+					if isAmz {
+						fmt.Printf(" • AWS CloudFront Subnet  : %s[MATCH / YES]%s (Amazon Web Services CDN)\n", ColorGreen, ColorReset)
+					} else {
+						fmt.Println(" • AWS CloudFront Subnet  : No")
+					}
+					if isFast {
+						fmt.Printf(" • Fastly CDN Subnet      : %s[MATCH / YES]%s (Fastly Global Edge)\n", ColorGreen, ColorReset)
+					} else {
+						fmt.Println(" • Fastly CDN Subnet      : No")
+					}
+				}
+			}
+		case "3":
+			fmt.Printf("\n[-]  Enter file path containing IP list: ")
+			if scanner.Scan() {
+				fPath := strings.TrimSpace(scanner.Text())
+				if fPath != "" {
+					file, err := os.Open(fPath)
+					if err != nil {
+						fmt.Printf("%s[!] Error opening file: %v%s\n", ColorRed, err, ColorReset)
+					} else {
+						defer file.Close()
+						s := bufio.NewScanner(file)
+						fmt.Println(strings.Repeat("─", 65))
+						for s.Scan() {
+							ip := strings.TrimSpace(s.Text())
+							if ip != "" && !strings.HasPrefix(ip, "#") {
+								ptrs, _ := net.LookupAddr(ip)
+								ptr := "None"
+								if len(ptrs) > 0 {
+									ptr = ptrs[0]
+								}
+								isCdn, prov := inspectCDN(ip, ip, nil, "", "")
+								fmt.Printf("%-18s -> %-24s | %s\n", ip, ptr, prov)
+								_ = isCdn
+							}
+						}
+						fmt.Println(strings.Repeat("─", 65))
+					}
+				}
+			}
+		}
+		pauseEnter(scanner)
+	}
+}
+
 func runIpLookupCLI(target string) {
 	clean := cleanTarget(target)
 	ip, allIPs, _, dnsTime := resolveDNS(clean)
 
 	fmt.Printf("\n%s─────────────────────────────────────────────────────────────%s\n", ColorCyan, ColorReset)
 	fmt.Printf("%sIP LOOKUP & NETWORK INTEL: %s%s\n", ColorBold, clean, ColorReset)
-	fmt.Printf("Resolved IPv4 : %s (DNS: %.1fms)\n", ip, dnsTime)
+	fmt.Printf("Resolved IPv4 : %s (DNS Lookup: %.1fms)\n", ip, dnsTime)
 	if len(allIPs) > 1 {
 		fmt.Printf("All IPv4/IPv6 : %s\n", strings.Join(allIPs, ", "))
 	}
@@ -1137,7 +1316,196 @@ func runIpLookupCLI(target string) {
 	fmt.Printf("%s─────────────────────────────────────────────────────────────%s\n", ColorCyan, ColorReset)
 }
 
-// Option [5]: Port Scanner
+// ----------------------------------------------------------------------------
+// SUB-MENU [4]: FILE TOOLKIT & RESULTS SUBMENU
+// ----------------------------------------------------------------------------
+func runFileToolkitInteractive(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
+		fmt.Printf("%s┃             [4] SAVED AUDIT RESULTS & FILE TOOLKIT                    ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
+
+		dirs := []string{
+			"cdn/cloudflare", "cdn/cloudfront", "cdn/fastly",
+			"cdn/akamai", "cdn/google", "cdn/gcore", "cdn/others",
+			"sni", "direct-ip", "unreachable",
+		}
+
+		totalFiles := 0
+		var allSavedFiles []string
+
+		fmt.Println("Saved Report Folders:")
+		for i, d := range dirs {
+			entries, err := os.ReadDir(d)
+			count := 0
+			if err == nil {
+				count = len(entries)
+				for _, e := range entries {
+					if !e.IsDir() && strings.HasSuffix(e.Name(), ".txt") {
+						allSavedFiles = append(allSavedFiles, filepath.Join(d, e.Name()))
+					}
+				}
+			}
+			totalFiles += count
+			fmt.Printf(" [%d] %-20s : %s%d saved reports%s\n", i+1, d, ColorGreen, count, ColorReset)
+		}
+
+		fmt.Printf("\nTotal Saved Probes: %s%d files%s\n", ColorCyan, totalFiles, ColorReset)
+		fmt.Println(strings.Repeat("─", 65))
+		fmt.Println("[1] List all saved files in order")
+		fmt.Println("[2] View / Read full content of a saved report")
+		fmt.Println("[3] Export all alive hosts into a clean list (alive_hosts.txt)")
+		fmt.Println("[4] Clear / Delete all saved results")
+		fmt.Println("[0] Return to Main Menu")
+		fmt.Printf("[-] Your Choice: ")
+
+		if !scanner.Scan() {
+			break
+		}
+		subChoice := strings.ToUpper(strings.TrimSpace(scanner.Text()))
+
+		if subChoice == "0" || subChoice == "EXIT" || subChoice == "Q" || subChoice == "BACK" {
+			break
+		}
+
+		switch subChoice {
+		case "1", "L", "LIST":
+			if len(allSavedFiles) == 0 {
+				fmt.Println("No files saved yet. Run a scan first.")
+			} else {
+				fmt.Println("\nSaved Files List:")
+				for idx, f := range allSavedFiles {
+					fmt.Printf(" %3d) %s\n", idx+1, f)
+				}
+			}
+
+		case "2", "V", "VIEW", "READ":
+			if len(allSavedFiles) == 0 {
+				fmt.Println("No files to view.")
+			} else {
+				fmt.Printf("\nEnter File Number (1 - %d) or exact file path: ", len(allSavedFiles))
+				if scanner.Scan() {
+					input := strings.TrimSpace(scanner.Text())
+					var targetPath string
+
+					if num, err := strconv.Atoi(input); err == nil && num >= 1 && num <= len(allSavedFiles) {
+						targetPath = allSavedFiles[num-1]
+					} else {
+						targetPath = input
+					}
+
+					data, err := os.ReadFile(targetPath)
+					if err != nil {
+						fmt.Printf("%s[!] Error reading file %s: %v%s\n", ColorRed, targetPath, err, ColorReset)
+					} else {
+						fmt.Printf("\n%s--- CONTENTS OF %s ---%s\n", ColorCyan, targetPath, ColorReset)
+						fmt.Println(string(data))
+						fmt.Printf("%s--- END OF FILE ---%s\n", ColorCyan, ColorReset)
+					}
+				}
+			}
+
+		case "3", "E", "EXPORT":
+			var aliveList []string
+			for _, f := range allSavedFiles {
+				if !strings.Contains(f, "unreachable") {
+					base := filepath.Base(f)
+					host := strings.TrimSuffix(base, ".txt")
+					host = strings.ReplaceAll(host, "_", ".")
+					aliveList = append(aliveList, host)
+				}
+			}
+
+			if len(aliveList) == 0 {
+				fmt.Println("No alive hosts to export.")
+			} else {
+				exportPath := "alive_hosts.txt"
+				content := strings.Join(aliveList, "\n") + "\n"
+				err := os.WriteFile(exportPath, []byte(content), 0644)
+				if err != nil {
+					fmt.Printf("%s[!] Failed to write %s: %v%s\n", ColorRed, exportPath, err, ColorReset)
+				} else {
+					fmt.Printf("\n%s[✓] Successfully exported %d alive hosts to %s!%s\n", ColorGreen, len(aliveList), exportPath, ColorReset)
+					fmt.Println("You can use this file directly in V2Ray, HTTP Custom, NapsternetV, or SSH tunnels.")
+				}
+			}
+
+		case "4", "C", "CLEAR":
+			fmt.Printf("%sAre you sure you want to delete all saved reports? (y/n): %s", ColorRed, ColorReset)
+			if scanner.Scan() {
+				if strings.ToLower(strings.TrimSpace(scanner.Text())) == "y" {
+					for _, d := range dirs {
+						_ = os.RemoveAll(d)
+					}
+					initDirectories()
+					fmt.Printf("%s[✓] All result directories have been reset.%s\n", ColorGreen, ColorReset)
+				}
+			}
+		}
+		pauseEnter(scanner)
+	}
+}
+
+// ----------------------------------------------------------------------------
+// SUB-MENU [5]: PORT SCANNER SUBMENU
+// ----------------------------------------------------------------------------
+func runPortScannerSubmenu(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorWhite, ColorReset)
+		fmt.Printf("%s┃                   [5] TCP PORT SCANNER & TTFB MATRIX                  ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorWhite, ColorReset)
+
+		fmt.Printf("%s[1]%s Standard Bughost Ports Scan (80, 443, 8080, 8443, 2052, 2053, 2082, 2083, 2087, 2096)\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s Full Common Network Ports Scan (21, 22, 25, 53, 80, 110, 143, 443, 3128, 8080, 8888)\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s Custom Single Port / Custom Port List Scan\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
+
+		fmt.Printf("[-]  Choice: ")
+		if !scanner.Scan() {
+			break
+		}
+		c := strings.TrimSpace(scanner.Text())
+
+		if c == "0" || c == "exit" || c == "back" {
+			break
+		}
+
+		switch c {
+		case "1":
+			fmt.Printf("\n[-]  Enter Target Host or IP: ")
+			if scanner.Scan() {
+				tgt := strings.TrimSpace(scanner.Text())
+				if tgt != "" {
+					runPortScannerCLI(tgt)
+				}
+			}
+		case "2":
+			fmt.Printf("\n[-]  Enter Target Host or IP: ")
+			if scanner.Scan() {
+				tgt := strings.TrimSpace(scanner.Text())
+				if tgt != "" {
+					runFullPortsScannerCLI(tgt)
+				}
+			}
+		case "3":
+			fmt.Printf("\n[-]  Enter Target Host or IP: ")
+			if scanner.Scan() {
+				tgt := strings.TrimSpace(scanner.Text())
+				if tgt != "" {
+					fmt.Printf("[-]  Enter port(s) to scan (e.g. 80,443,3128,8888): ")
+					if scanner.Scan() {
+						pList := strings.TrimSpace(scanner.Text())
+						runCustomPortsScannerCLI(tgt, pList)
+					}
+				}
+			}
+		}
+		pauseEnter(scanner)
+	}
+}
+
 func runPortScannerCLI(target string) {
 	clean := cleanTarget(target)
 	ip, _, _, _ := resolveDNS(clean)
@@ -1158,10 +1526,6 @@ func runPortScannerCLI(target string) {
 		{2087, "WHM HTTPS Tunnel"},
 		{2095, "Webmail HTTP"},
 		{2096, "Webmail HTTPS"},
-		{22, "SSH Tunnel"},
-		{53, "DNS Service"},
-		{3128, "Squid Proxy"},
-		{8888, "Custom HTTP Proxy"},
 	}
 
 	fmt.Printf("\n%sPORT SCAN FOR %s (%s):%s\n", ColorWhite, clean, ip, ColorReset)
@@ -1183,7 +1547,99 @@ func runPortScannerCLI(target string) {
 	fmt.Println(strings.Repeat("─", 65))
 }
 
-// Option [6]: DNS Records
+func runFullPortsScannerCLI(target string) {
+	clean := cleanTarget(target)
+	ip, _, _, _ := resolveDNS(clean)
+
+	ports := []struct {
+		port int
+		name string
+	}{
+		{21, "FTP Control"}, {22, "SSH Tunnel"}, {23, "Telnet"}, {25, "SMTP Mail"},
+		{53, "DNS Service"}, {80, "HTTP Web"}, {110, "POP3 Mail"}, {143, "IMAP Mail"},
+		{443, "HTTPS Web"}, {465, "SMTPS Mail"}, {587, "Submission Mail"}, {993, "IMAPS"},
+		{995, "POP3S"}, {3128, "Squid Proxy"}, {8080, "HTTP Alt / WS"}, {8443, "HTTPS Alt / WSS"},
+		{8888, "Custom Proxy"},
+	}
+
+	fmt.Printf("\n%sFULL SERVICE PORT SCAN FOR %s (%s):%s\n", ColorWhite, clean, ip, ColorReset)
+	fmt.Println(strings.Repeat("─", 65))
+	for _, p := range ports {
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", ip, p.port), 1000*time.Millisecond)
+		if err == nil {
+			rtt := float64(time.Since(start).Microseconds()) / 1000.0
+			conn.Close()
+			fmt.Printf("%s%-6d %-10s %-12.1f %s%s\n", ColorGreen, p.port, "OPEN", rtt, p.name, ColorReset)
+		} else {
+			fmt.Printf("%s%-6d %-10s %-12s %s%s\n", ColorDim, p.port, "CLOSED", "-", p.name, ColorReset)
+		}
+	}
+	fmt.Println(strings.Repeat("─", 65))
+}
+
+func runCustomPortsScannerCLI(target string, portStr string) {
+	clean := cleanTarget(target)
+	ip, _, _, _ := resolveDNS(clean)
+	parts := strings.Split(portStr, ",")
+
+	fmt.Printf("\n%sCUSTOM PORT SCAN FOR %s (%s):%s\n", ColorWhite, clean, ip, ColorReset)
+	fmt.Println(strings.Repeat("─", 50))
+	for _, rawP := range parts {
+		pNum, err := strconv.Atoi(strings.TrimSpace(rawP))
+		if err != nil {
+			continue
+		}
+		start := time.Now()
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", ip, pNum), 1200*time.Millisecond)
+		if err == nil {
+			rtt := float64(time.Since(start).Microseconds()) / 1000.0
+			conn.Close()
+			fmt.Printf("%sPort %-6d : OPEN   (%.1f ms)%s\n", ColorGreen, pNum, rtt, ColorReset)
+		} else {
+			fmt.Printf("%sPort %-6d : CLOSED / FILTERED%s\n", ColorDim, pNum, ColorReset)
+		}
+	}
+	fmt.Println(strings.Repeat("─", 50))
+}
+
+// ----------------------------------------------------------------------------
+// SUB-MENU [6]: DNS RECORDS SUBMENU
+// ----------------------------------------------------------------------------
+func runDnsRecordsSubmenu(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorGreen, ColorReset)
+		fmt.Printf("%s┃                    [6] DNS RECORD INTEL & LOOKUP                      ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorGreen, ColorReset)
+
+		fmt.Printf("%s[1]%s Query All DNS Records (A, AAAA, CNAME, MX, TXT, NS)\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s Query A & AAAA IP Records Only\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s Query CNAME & Redirection Target\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[4]%s Query Nameservers (NS) & TXT Records\n", ColorYellow, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
+
+		fmt.Printf("[-]  Choice: ")
+		if !scanner.Scan() {
+			break
+		}
+		c := strings.TrimSpace(scanner.Text())
+
+		if c == "0" || c == "exit" || c == "back" {
+			break
+		}
+
+		fmt.Printf("\n[-]  Enter Domain Name (e.g. speed.cloudflare.com): ")
+		if scanner.Scan() {
+			dom := strings.TrimSpace(scanner.Text())
+			if dom != "" {
+				runDnsRecordsCLI(dom)
+			}
+		}
+		pauseEnter(scanner)
+	}
+}
+
 func runDnsRecordsCLI(domain string) {
 	clean := cleanTarget(domain)
 	fmt.Printf("\n%sQUERYING DNS RECORDS FOR: %s%s\n", ColorGreen, clean, ColorReset)
@@ -1234,12 +1690,47 @@ func runDnsRecordsCLI(domain string) {
 	fmt.Println(strings.Repeat("─", 65))
 }
 
-// Option [7]: Host SSL / TLS Info
+// ----------------------------------------------------------------------------
+// SUB-MENU [7]: HOST SSL/TLS INFO SUBMENU
+// ----------------------------------------------------------------------------
+func runHostInfoSubmenu(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorBlue, ColorReset)
+		fmt.Printf("%s┃                  [7] HOST SSL/TLS & CERTIFICATE AUDIT                 ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorBlue, ColorReset)
+
+		fmt.Printf("%s[1]%s Deep SSL/TLS Handshake & Certificate Inspection\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s SNI Domain Fronting & ALPN Protocol Test (h2, http/1.1)\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s Check SSL Certificate Expiry & Subject Alternative Names (SANs)\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
+
+		fmt.Printf("[-]  Choice: ")
+		if !scanner.Scan() {
+			break
+		}
+		c := strings.TrimSpace(scanner.Text())
+
+		if c == "0" || c == "exit" || c == "back" {
+			break
+		}
+
+		fmt.Printf("\n[-]  Enter Host / Domain: ")
+		if scanner.Scan() {
+			tgt := strings.TrimSpace(scanner.Text())
+			if tgt != "" {
+				runHostInfoCLI(tgt)
+			}
+		}
+		pauseEnter(scanner)
+	}
+}
+
 func runHostInfoCLI(target string) {
 	clean := cleanTarget(target)
 	ip, _, _, _ := resolveDNS(clean)
 
-	fmt.Printf("\n%sEXTRACTING SSL/TLS HOST CERTIFICATE FOR %s...%s\n", ColorBlue, clean, ColorReset)
+	fmt.Printf("\n%sEXTRACTING SSL/TLS HOST CERTIFICATE FOR %s (%s)...%s\n", ColorBlue, clean, ip, ColorReset)
 
 	conf := &tls.Config{
 		ServerName:         clean,
@@ -1247,7 +1738,7 @@ func runHostInfoCLI(target string) {
 		NextProtos:         []string{"h2", "http/1.1"},
 	}
 
-	dialer := &net.Dialer{Timeout: 3000 * time.Millisecond}
+	dialer := &net.Dialer{Timeout: 3500 * time.Millisecond}
 	conn, err := tls.DialWithDialer(dialer, "tcp", fmt.Sprintf("%s:443", ip), conf)
 	if err != nil {
 		fmt.Printf("%s[!] Failed to establish TLS handshake: %v%s\n", ColorRed, err, ColorReset)
@@ -1286,48 +1777,69 @@ func runHostInfoCLI(target string) {
 	fmt.Println(strings.Repeat("─", 65))
 }
 
-// Print Main Menu - Exact Screenshot Match
-func printMainMenu() {
-	fmt.Printf("%s[1]  HOST SCANNER%s\n", ColorCyan, ColorReset)
-	fmt.Printf("%s[2]  SUBFINDER%s\n", ColorPurple, ColorReset)
-	fmt.Printf("%s[3]  IP LOOKUP%s\n", ColorCyan, ColorReset)
-	fmt.Printf("%s[4]  FILE TOOLKIT & RESULTS%s\n", ColorPurple, ColorReset)
-	fmt.Printf("%s[5]  PORT SCANNER%s\n", ColorWhite, ColorReset)
-	fmt.Printf("%s[6]  DNS RECORD%s\n", ColorGreen, ColorReset)
-	fmt.Printf("%s[7]  HOST INFO%s\n", ColorBlue, ColorReset)
-	fmt.Printf("%s[8]  HELP%s\n", ColorYellow, ColorReset)
-	fmt.Printf("%s[9]  UPDATE%s\n", ColorPurple, ColorReset)
-	fmt.Printf("%s[0]  EXIT%s\n\n", ColorRed, ColorReset)
+// ----------------------------------------------------------------------------
+// SUB-MENU [8]: HELP & MANUAL SUBMENU
+// ----------------------------------------------------------------------------
+func runHelpSubmenu(scanner *bufio.Scanner) {
+	for {
+		clearScreen()
+		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorYellow, ColorReset)
+		fmt.Printf("%s┃                      [8] LoXaSB PRO 5.4 USER GUIDE                    ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorYellow, ColorReset)
+
+		fmt.Printf("%s[1]%s LoXaSB Pro Complete Feature Overview\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s How to Find Working Cloudflare / CDN Bughosts\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s V2Ray / HTTP Custom / SSH Setup Instructions\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
+
+		fmt.Printf("[-]  Choice: ")
+		if !scanner.Scan() {
+			break
+		}
+		c := strings.TrimSpace(scanner.Text())
+
+		if c == "0" || c == "exit" || c == "back" {
+			break
+		}
+
+		switch c {
+		case "1":
+			fmt.Println(`
+LoXaSB Pro 5.4 Overview:
+• Option [1] Host Scanner: Probes hosts/CIDRs with TTFB, HTTP codes, TLS 1.3 & port matrices.
+• Option [2] Subfinder   : Enumerates subdomains matching zero-rated CDN patterns.
+• Option [3] IP Lookup   : Resolves reverse PTR and detects ASN cloud subnets.
+• Option [4] File Toolkit: Explores saved reports and exports clean alive_hosts.txt.
+• Option [5] Port Scanner: Fast multi-port response benchmark.
+• Option [6] DNS Record  : Queries A, AAAA, CNAME, MX, NS, TXT.
+• Option [7] Host Info   : Deep SSL certificate audit & SAN inspection.
+• Option [9] Update      : Automated OTA self-updater from GitHub.`)
+		case "2":
+			fmt.Println(`
+Finding Working Bughosts:
+1. Use Subfinder [2] on your ISP's zero-rated or education domain (e.g. siyavula.com).
+2. Check if the subdomain resolves to Cloudflare (104.16.0.0/12, 172.64.0.0/13) or CloudFront.
+3. Test with Host Scanner [1] - look for 'HTTP 101 WebSocket' or 'HTTP 200/403 with Valid TLS'.
+4. Save the host and use it as your SNI in tunneling apps.`)
+		case "3":
+			fmt.Println(`
+Tunnel Setup Guide:
+• V2Ray / VLESS WebSocket: Set SNI = <Bughost Domain>, Host = <Your Server Domain>.
+• HTTP Custom SSL/TLS   : Set SNI / Bug = <Bughost Domain>, Port = 443.
+• SSH Tunnel with SSL   : Use SNI mode with the verified Bughost.`)
+		}
+		pauseEnter(scanner)
+	}
 }
 
-func showHelpCLI() {
-	fmt.Println(strings.Repeat("─", 65))
-	fmt.Printf("%s%sLoXaSB PRO 5.4 - CLI USER GUIDE & MANUAL%s\n", ColorYellow, ColorBold, ColorReset)
-	fmt.Println(`
-Interactive Menu:
- [1] HOST SCANNER  : Deep diagnostic audit of Host / Domain / IP / CIDR
- [2] SUBFINDER     : Subdomain discovery for cloud CDN bughost finding
- [3] IP LOOKUP     : Reverse PTR, ASN, and cloud network classification
- [4] FILE TOOLKIT  : Explore categorized folders, read reports, export alive_hosts.txt
- [5] PORT SCANNER  : Fast TCP port scanner with TTFB response times
- [6] DNS RECORD    : Query A, AAAA, CNAME, MX, TXT, NS records
- [7] HOST INFO     : Detailed SSL/TLS certificate inspection & SANs
- [8] HELP          : Display this documentation manual
- [9] UPDATE        : Telemetry, version, and one-line Termux updater
- [0] EXIT          : Terminate application
-
-CLI Flag Usage:
-  ./loxasb -t speed.cloudflare.com
-  ./loxasb -cidr 104.16.0.0/24 -w 25
-  ./loxasb -f hosts.txt -w 20`)
-	fmt.Println(strings.Repeat("─", 65))
-}
-
+// ----------------------------------------------------------------------------
+// SUB-MENU [9]: OVER-THE-AIR (OTA) SELF UPDATER
+// ----------------------------------------------------------------------------
 func runSelfUpdateCLI(scanner *bufio.Scanner) {
-	fmt.Println()
+	clearScreen()
 	fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorPurple, ColorReset)
 	fmt.Printf("%s┃        LoXaSB PRO 5.4 - AUTOMATED OVER-THE-AIR (OTA) SELF UPDATER     ┃%s\n", ColorBold, ColorReset)
-	fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n", ColorPurple, ColorReset)
+	fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorPurple, ColorReset)
 
 	updateUrl := "https://raw.githubusercontent.com/roxasblessed403-design/LoXaS/main/loxasb.go"
 	fmt.Printf("Current Engine   : %sLoXaSB PRO 5.4 SUPREME (Go Native)%s\n", ColorGreen, ColorReset)
@@ -1341,6 +1853,7 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
 	if ans != "y" && ans != "yes" {
 		fmt.Println("Update cancelled.")
+		pauseEnter(scanner)
 		return
 	}
 
@@ -1350,6 +1863,7 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	req, err := http.NewRequest("GET", updateUrl, nil)
 	if err != nil {
 		fmt.Printf("%s[!] Request error: %v%s\n", ColorRed, err, ColorReset)
+		pauseEnter(scanner)
 		return
 	}
 	req.Header.Set("User-Agent", "LoXaSB-Termux-AutoUpdater/5.4")
@@ -1358,18 +1872,21 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	if err != nil {
 		fmt.Printf("%s[!] Failed to connect to GitHub: %v%s\n", ColorRed, err, ColorReset)
 		fmt.Println("Please check your internet connection in Termux.")
+		pauseEnter(scanner)
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
 		fmt.Printf("%s[!] GitHub server returned HTTP %d: %s%s\n", ColorRed, resp.StatusCode, resp.Status, ColorReset)
+		pauseEnter(scanner)
 		return
 	}
 
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil || len(bodyBytes) < 500 {
 		fmt.Printf("%s[!] Corrupt or incomplete update file received (%d bytes).%s\n", ColorRed, len(bodyBytes), ColorReset)
+		pauseEnter(scanner)
 		return
 	}
 
@@ -1377,6 +1894,7 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	err = os.WriteFile(targetGoFile, bodyBytes, 0644)
 	if err != nil {
 		fmt.Printf("%s[!] Failed to write updated source to %s: %v%s\n", ColorRed, targetGoFile, err, ColorReset)
+		pauseEnter(scanner)
 		return
 	}
 	fmt.Printf("%s[✓] Downloaded %d bytes of verified Go source code.%s\n", ColorGreen, len(bodyBytes), ColorReset)
@@ -1389,6 +1907,7 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	err = cmd.Run()
 	if err != nil {
 		fmt.Printf("%s[!] Compilation failed: %v%s\n", ColorRed, err, ColorReset)
+		pauseEnter(scanner)
 		return
 	}
 	_ = os.Chmod("loxasb", 0755)
@@ -1406,7 +1925,6 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	loxasDest := filepath.Join(binDir, "loxas")
 	lxDest := filepath.Join(binDir, "lx")
 
-	// Remove existing files to prevent ETXTBUSY (Text file busy) error
 	_ = os.Remove(loxasDest)
 	_ = os.Remove(lxDest)
 
@@ -1426,6 +1944,26 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	fmt.Printf("%s┃  You are now running the latest LoXaSB Pro Supreme Engine.           ┃%s\n", ColorGreen, ColorReset)
 	fmt.Printf("%s┃  You can type 'loxas' or 'lx' from ANY folder in Termux at any time.  ┃%s\n", ColorGreen, ColorReset)
 	fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorGreen, ColorReset)
+	pauseEnter(scanner)
+}
+
+// Print Main Menu - Exact Screenshot Match with Clear Screen
+func printMainMenu() {
+	clearScreen()
+	fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
+	fmt.Printf("%s┃               LoXaSB PRO 5.4 - SUPREME NETWORK ENGINE                 ┃%s\n", ColorBold, ColorReset)
+	fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
+
+	fmt.Printf("%s[1]  HOST SCANNER%s\n", ColorCyan, ColorReset)
+	fmt.Printf("%s[2]  SUBFINDER%s\n", ColorPurple, ColorReset)
+	fmt.Printf("%s[3]  IP LOOKUP%s\n", ColorCyan, ColorReset)
+	fmt.Printf("%s[4]  FILE TOOLKIT & RESULTS%s\n", ColorPurple, ColorReset)
+	fmt.Printf("%s[5]  PORT SCANNER%s\n", ColorWhite, ColorReset)
+	fmt.Printf("%s[6]  DNS RECORD%s\n", ColorGreen, ColorReset)
+	fmt.Printf("%s[7]  HOST INFO%s\n", ColorBlue, ColorReset)
+	fmt.Printf("%s[8]  HELP%s\n", ColorYellow, ColorReset)
+	fmt.Printf("%s[9]  UPDATE%s\n", ColorPurple, ColorReset)
+	fmt.Printf("%s[0]  EXIT%s\n\n", ColorRed, ColorReset)
 }
 
 func main() {
@@ -1487,7 +2025,7 @@ func main() {
 		return
 	}
 
-	// Interactive Termux CLI Mode
+	// Interactive Termux CLI Mode with Clear Screen & Submenus
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	go func() {
@@ -1509,103 +2047,30 @@ func main() {
 
 		switch choice {
 		case "1", "01":
-			fmt.Printf("[-]  Enter Host / Domain / IP / CIDR (e.g. speed.cloudflare.com or 104.16.0.0/24): ")
-			if scanner.Scan() {
-				h := strings.TrimSpace(scanner.Text())
-				if h != "" {
-					if strings.Contains(h, "/") {
-						ips, count, netIP, maskIP, firstU, lastU, err := calculateAndExpandCIDR(h)
-						if err != nil {
-							fmt.Printf("%s[!] Invalid CIDR format: %v%s\n", ColorRed, err, ColorReset)
-						} else {
-							// Display CIDR Calculation Box
-							fmt.Println()
-							fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
-							fmt.Printf("%s┃                   CIDR SUBNET CALCULATION BREAKDOWN                   ┃%s\n", ColorBold, ColorReset)
-							fmt.Printf("%s┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫%s\n", ColorCyan, ColorReset)
-							fmt.Printf("┃ • Input CIDR       : %-49s ┃\n", h)
-							fmt.Printf("┃ • Network IP       : %-49s ┃\n", netIP.String())
-							fmt.Printf("┃ • Subnet Netmask   : %-49s ┃\n", maskIP.String())
-							fmt.Printf("┃ • Total Host IPs   : %-49s ┃\n", fmt.Sprintf("%d Total IPs", count))
-							fmt.Printf("┃ • Usable IP Range  : %-49s ┃\n", fmt.Sprintf("%s  ->  %s", firstU, lastU))
-							fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
-
-							// Prompt for workers
-							workers := 25
-							fmt.Printf("[-]  Enter number of concurrent workers [default 25, max 100]: ")
-							if scanner.Scan() {
-								wText := strings.TrimSpace(scanner.Text())
-								if wText != "" {
-									if parsedW, err := strconv.Atoi(wText); err == nil && parsedW > 0 {
-										workers = parsedW
-									}
-								}
-							}
-
-							runConcurrentCIDRScanner(ips, workers, h)
-						}
-					} else {
-						res := probeTarget(h, 5, true)
-						displayResult(res)
-					}
-				}
-			}
+			runHostScannerSubmenu(scanner)
 		case "2", "02":
-			fmt.Printf("[-]  Enter Root Domain (e.g. cloudflare.com): ")
-			if scanner.Scan() {
-				dom := strings.TrimSpace(scanner.Text())
-				if dom != "" {
-					runSubfinderCLI(dom)
-				}
-			}
+			runSubfinderSubmenu(scanner)
 		case "3", "03":
-			fmt.Printf("[-]  Enter IP address or hostname: ")
-			if scanner.Scan() {
-				tgt := strings.TrimSpace(scanner.Text())
-				if tgt != "" {
-					runIpLookupCLI(tgt)
-				}
-			}
+			runIpLookupSubmenu(scanner)
 		case "4", "04":
 			runFileToolkitInteractive(scanner)
 		case "5", "05":
-			fmt.Printf("[-]  Enter Host or IP to scan ports: ")
-			if scanner.Scan() {
-				tgt := strings.TrimSpace(scanner.Text())
-				if tgt != "" {
-					runPortScannerCLI(tgt)
-				}
-			}
+			runPortScannerSubmenu(scanner)
 		case "6", "06":
-			fmt.Printf("[-]  Enter Domain name for DNS records: ")
-			if scanner.Scan() {
-				dom := strings.TrimSpace(scanner.Text())
-				if dom != "" {
-					runDnsRecordsCLI(dom)
-				}
-			}
+			runDnsRecordsSubmenu(scanner)
 		case "7", "07":
-			fmt.Printf("[-]  Enter Host / Domain for SSL/TLS info: ")
-			if scanner.Scan() {
-				tgt := strings.TrimSpace(scanner.Text())
-				if tgt != "" {
-					runHostInfoCLI(tgt)
-				}
-			}
+			runHostInfoSubmenu(scanner)
 		case "8", "08", "help":
-			showHelpCLI()
+			runHelpSubmenu(scanner)
 		case "9", "09", "update":
 			runSelfUpdateCLI(scanner)
 		case "0", "00", "exit", "quit":
-			fmt.Println("Exiting LoXaSB Pro.")
+			clearScreen()
+			fmt.Println("Exiting LoXaSB Pro. Goodbye!")
 			return
 		default:
 			fmt.Printf("%sInvalid choice: %s. Please enter 1 - 0.%s\n\n", ColorRed, choice, ColorReset)
-			continue
+			pauseEnter(scanner)
 		}
-
-		fmt.Printf("\n%sPress ENTER to continue...%s", ColorDim, ColorReset)
-		scanner.Scan()
-		fmt.Println()
 	}
 }
