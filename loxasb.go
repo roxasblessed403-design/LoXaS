@@ -1355,6 +1355,10 @@ func runSelfUpdateCLI(scanner *bufio.Scanner) {
 	loxasDest := filepath.Join(binDir, "loxas")
 	lxDest := filepath.Join(binDir, "lx")
 
+	// Remove existing files to prevent ETXTBUSY (Text file busy) error
+	_ = os.Remove(loxasDest)
+	_ = os.Remove(lxDest)
+
 	compiledData, err := os.ReadFile("loxasb")
 	if err == nil {
 		_ = os.WriteFile(loxasDest, compiledData, 0755)

@@ -42,6 +42,7 @@ chmod +x loxasb
 
 # Install globally to $PREFIX/bin as 'loxas' and 'lx'
 echo -e "\033[1;33m[+] Installing global shortcuts: 'loxas' and 'lx'...\033[0m"
+rm -f $PREFIX/bin/loxas $PREFIX/bin/lx 2>/dev/null || true
 cp loxasb $PREFIX/bin/loxas 2>/dev/null || cp loxasb /data/data/com.termux/files/usr/bin/loxas 2>/dev/null || true
 cp loxasb $PREFIX/bin/lx 2>/dev/null || cp loxasb /data/data/com.termux/files/usr/bin/lx 2>/dev/null || true
 chmod +x $PREFIX/bin/loxas $PREFIX/bin/lx 2>/dev/null || true
