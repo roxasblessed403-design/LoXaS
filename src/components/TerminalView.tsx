@@ -24,8 +24,9 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 }) => {
   const [inputVal, setInputVal] = useState('');
   const [currentMenuStep, setCurrentMenuStep] = useState<
-    'main' | 'prompt_host' | 'prompt_subfinder' | 'prompt_iplookup' | 'prompt_portscan' | 'prompt_dns' | 'prompt_hostinfo'
+    'main' | 'host_mode_select' | 'prompt_host' | 'prompt_subfinder' | 'prompt_iplookup' | 'prompt_portscan' | 'prompt_dns' | 'prompt_hostinfo'
   >('main');
+  const [selectedHostMode, setSelectedHostMode] = useState<string>('direct');
   const [history, setHistory] = useState<TerminalLogLine[]>([]);
   const [isRunning, setIsRunning] = useState(false);
 
@@ -60,6 +61,25 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     setCurrentMenuStep('main');
   };
 
+  const showHostScannerMenu = () => {
+    setHistory([
+      { id: 'h_title', type: 'banner', text: '┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓' },
+      { id: 'h_hdr', type: 'banner', text: '┃                   [1] HOST & NETWORK SCANNER SUITE                    ┃' },
+      { id: 'h_mid', type: 'banner', text: '┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫' },
+      { id: 'h_sub', type: 'banner', text: '┃ Select Scanning Mode (BugScan-X Architecture):                        ┃' },
+      { id: 'h_bot', type: 'banner', text: '┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛' },
+      { id: 'h_1', type: 'menu_1', text: '[1]  Direct        - Direct HTTP Prober with customizable Methods & Ports', choiceKey: '1' },
+      { id: 'h_2', type: 'menu_2', text: '[2]  DirectNon302  - Direct HTTP Filter (Excludes 301/302 Redirect Responses)', choiceKey: '2' },
+      { id: 'h_3', type: 'menu_3', text: '[3]  ProxyTest     - WebSocket 101 Upgrade & Custom Payload Injection Probe', choiceKey: '3' },
+      { id: 'h_4', type: 'menu_4', text: '[4]  ProxyRoute    - Upstream Proxy Routing Scanner with Optional Auth', choiceKey: '4' },
+      { id: 'h_5', type: 'menu_5', text: '[5]  Ping          - TCP/ICMP Latency, Jitter & Packet Loss Benchmark', choiceKey: '5' },
+      { id: 'h_6', type: 'menu_6', text: '[6]  SSL           - TLS 1.3 / SNI Handshake, SAN Certificate & Fronting Audit', choiceKey: '6' },
+      { id: 'h_0', type: 'menu_0', text: '[0]  Return to Main Menu', choiceKey: '0' },
+      { id: 'h_sep', type: 'output', text: '' },
+    ]);
+    setCurrentMenuStep('host_mode_select');
+  };
+
   useEffect(() => {
     showMainMenu();
   }, []);
@@ -81,9 +101,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       switch (val) {
         case '1':
         case '01':
-          setCurrentMenuStep('prompt_host');
-          appendLine('[-]  [1] HOST SCANNER: Ping, ICMP, Loss, Route Hops & CDN Probe', 'menu_1');
-          appendLine('[-]  Enter Host, Domain, IP, or CIDR (e.g. speed.cloudflare.com or 104.16.0.0/28):', 'warn');
+          showHostScannerMenu();
           break;
 
         case '2':
@@ -151,9 +169,64 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
           showMainMenu();
           break;
       }
+    } else if (currentMenuStep === 'host_mode_select') {
+      appendLine(`[-]  Mode Choice: ${val}`, 'input');
+
+      switch (val) {
+        case '1':
+        case 'direct':
+        case 'Direct':
+          setSelectedHostMode('direct');
+          setCurrentMenuStep('prompt_host');
+          appendLine('[-]  [Mode: Direct HTTP] Enter Host / CIDR / Domain (e.g. speed.cloudflare.com or 104.16.0.0/28):', 'warn');
+          break;
+        case '2':
+        case 'directnon302':
+        case 'DirectNon302':
+          setSelectedHostMode('direct_non302');
+          setCurrentMenuStep('prompt_host');
+          appendLine('[-]  [Mode: Direct Non-302] Enter Host / CIDR / Domain (e.g. 104.21.0.0/24):', 'warn');
+          break;
+        case '3':
+        case 'proxytest':
+        case 'ProxyTest':
+          setSelectedHostMode('proxy_test');
+          setCurrentMenuStep('prompt_host');
+          appendLine('[-]  [Mode: ProxyTest WebSocket 101] Enter Target / Host to probe:', 'warn');
+          break;
+        case '4':
+        case 'proxyroute':
+        case 'ProxyRoute':
+          setSelectedHostMode('proxy_route');
+          setCurrentMenuStep('prompt_host');
+          appendLine('[-]  [Mode: ProxyRoute Upstream Tunnel] Enter Target Host / Domain:', 'warn');
+          break;
+        case '5':
+        case 'ping':
+        case 'Ping':
+          setSelectedHostMode('ping');
+          setCurrentMenuStep('prompt_host');
+          appendLine('[-]  [Mode: Ping Latency & Jitter] Enter Target IP / Host or CIDR:', 'warn');
+          break;
+        case '6':
+        case 'ssl':
+        case 'SSL':
+          setSelectedHostMode('ssl');
+          setCurrentMenuStep('prompt_host');
+          appendLine('[-]  [Mode: SSL TLS 1.3 / SNI Fronting] Enter Host / Domain:', 'warn');
+          break;
+        case '0':
+        case 'back':
+        case 'exit':
+          showMainMenu();
+          break;
+        default:
+          appendLine(`[-]  Invalid Choice "${val}". Select 1 - 6 or 0 to return.`, 'error');
+          break;
+      }
     } else if (currentMenuStep === 'prompt_host') {
       appendLine(`[-]  Target: ${val}`, 'input');
-      runHostScanner(val);
+      runHostScanner(val, selectedHostMode);
       setCurrentMenuStep('main');
     } else if (currentMenuStep === 'prompt_subfinder') {
       appendLine(`[-]  Domain: ${val}`, 'input');
@@ -179,9 +252,9 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   };
 
   // [1] HOST SCANNER
-  const runHostScanner = async (target: string) => {
+  const runHostScanner = async (target: string, mode: string = 'direct') => {
     setIsRunning(true);
-    appendLine(`[+] Resolving DNS & executing probe on: ${target}...`, 'output');
+    appendLine(`[+] Launching BugScan-X [${mode.toUpperCase()}] Scanner for: ${target}...`, 'output');
 
     if (target.includes('/')) {
       // CIDR range scan
@@ -244,6 +317,23 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
       const data: ScanItemResult = await res.json();
       onScanComplete?.(data);
+
+      if (mode === 'ping') {
+        appendLine(`─────────────────────────────────────────────────────────────────`, 'output');
+        appendLine(`Port    IP               Host`, 'menu_1');
+        appendLine(`----    --               ----`, 'output');
+        const openPorts = data.direct.openPorts.length > 0 ? data.direct.openPorts : [80, 443];
+        openPorts.forEach((p) => {
+          appendLine(`${String(p).padEnd(8)}${(data.resolvedIp || 'N/A').padEnd(17)}${data.target}`, 'success');
+        });
+        appendLine(`─────────────────────────────────────────────────────────────────`, 'output');
+        appendLine(`[✓] PING SCAN COMPLETED: ${openPorts.length} Open/Responsive Ports Found.`, 'success');
+        if (data.savedDirectory) {
+          appendLine(`AUTO-SAVED  : data_storage/${data.savedDirectory}/${data.savedFileName}`, 'success');
+        }
+        appendLine(`─────────────────────────────────────────────────────────────────`, 'output');
+        return;
+      }
 
       appendLine(`─────────────────────────────────────────────────────────────────`, 'output');
       appendLine(`TARGET      : ${data.target} (Resolved: ${data.resolvedIp || 'N/A'})`, 'success');

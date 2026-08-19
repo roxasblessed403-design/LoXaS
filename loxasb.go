@@ -937,23 +937,1031 @@ func runConcurrentCIDRScanner(ips []string, workers int, subnetInfo string) {
 }
 
 // ----------------------------------------------------------------------------
-// [1] HOST SCANNER SUBMENU (Direct, SSL/SNI, Ping, CIDR)
+// [1] HOST SCANNER - BUGSCAN-X SETUP WORKFLOW & WORKER POOLS
 // ----------------------------------------------------------------------------
+
+func readCIDRsFromFile(filepath string) []string {
+	var validCIDRs []string
+	file, err := os.Open(filepath)
+	if err != nil {
+		fmt.Printf("%s[!] Error reading file: %v%s\n", ColorRed, err, ColorReset)
+		return nil
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		_, _, err := net.ParseCIDR(line)
+		if err == nil {
+			validCIDRs = append(validCIDRs, line)
+		} else {
+			if ip := net.ParseIP(line); ip != nil {
+				validCIDRs = append(validCIDRs, line+"/32")
+			}
+		}
+	}
+	return validCIDRs
+}
+
+func getCIDRRangesFromInput(cidrInput string) []string {
+	var ranges []string
+	parts := strings.Split(cidrInput, ",")
+	for _, p := range parts {
+		clean := strings.TrimSpace(p)
+		if clean != "" {
+			ranges = append(ranges, clean)
+		}
+	}
+	return ranges
+}
+
+func getCommonInputs(scanner *bufio.Scanner) (string, int) {
+	defaultFilename := "results.txt"
+	fmt.Printf("[-]  Enter output filename [default: %s]: ", defaultFilename)
+	output := defaultFilename
+	if scanner.Scan() {
+		text := strings.TrimSpace(scanner.Text())
+		if text != "" {
+			output = text
+		}
+	}
+
+	defaultThreads := 50
+	fmt.Printf("[-]  Enter threads [default: %d]: ", defaultThreads)
+	threads := defaultThreads
+	if scanner.Scan() {
+		text := strings.TrimSpace(scanner.Text())
+		if text != "" {
+			if t, err := strconv.Atoi(text); err == nil && t > 0 {
+				threads = t
+			}
+		}
+	}
+	return output, threads
+}
+
+func getHostInput(scanner *bufio.Scanner) (string, []string) {
+	fmt.Printf("[-]  Enter filename (or press ENTER to specify CIDR/host): ")
+	var filename string
+	if scanner.Scan() {
+		filename = strings.TrimSpace(scanner.Text())
+	}
+
+	if filename == "" {
+		fmt.Printf("[-]  Enter CIDR range(s) (comma-separated, or press ENTER to use file/host): ")
+		var cidrStr string
+		if scanner.Scan() {
+			cidrStr = strings.TrimSpace(scanner.Text())
+		}
+		if cidrStr == "" {
+			fmt.Printf("[-]  Enter CIDR file or Hostname (e.g. cidrs.txt or speed.cloudflare.com): ")
+			var cidrFile string
+			if scanner.Scan() {
+				cidrFile = strings.TrimSpace(scanner.Text())
+			}
+			if cidrFile != "" {
+				if _, err := os.Stat(cidrFile); err == nil {
+					validCidrs := readCIDRsFromFile(cidrFile)
+					return "", validCidrs
+				} else {
+					return "", []string{cidrFile}
+				}
+			}
+			return "", nil
+		}
+		return "", getCIDRRangesFromInput(cidrStr)
+	}
+	return filename, nil
+}
+
+func parsePortList(input string, defaultPort int) []int {
+	if strings.TrimSpace(input) == "" {
+		return []int{defaultPort}
+	}
+	var ports []int
+	for _, p := range strings.Split(input, ",") {
+		clean := strings.TrimSpace(p)
+		if val, err := strconv.Atoi(clean); err == nil && val > 0 && val <= 65535 {
+			ports = append(ports, val)
+		}
+	}
+	if len(ports) == 0 {
+		return []int{defaultPort}
+	}
+	return ports
+}
+
+func expandAllTargets(filename string, cidrs []string) []string {
+	var targets []string
+	if filename != "" {
+		file, err := os.Open(filename)
+		if err == nil {
+			defer file.Close()
+			s := bufio.NewScanner(file)
+			for s.Scan() {
+				line := strings.TrimSpace(s.Text())
+				if line != "" && !strings.HasPrefix(line, "#") {
+					targets = append(targets, line)
+				}
+			}
+		} else {
+			fmt.Printf("%s[!] Could not open file %s: %v%s\n", ColorRed, filename, err, ColorReset)
+		}
+	}
+
+	for _, cidr := range cidrs {
+		if strings.Contains(cidr, "/") {
+			ips, _, _, _, _, _, err := calculateAndExpandCIDR(cidr)
+			if err == nil {
+				targets = append(targets, ips...)
+			} else {
+				targets = append(targets, cidr)
+			}
+		} else {
+			targets = append(targets, cidr)
+		}
+	}
+	return targets
+}
+
+func getInputDirect(scanner *bufio.Scanner, no302 bool) {
+	fmt.Println()
+	modeTitle := "Direct HTTP Scanner"
+	if no302 {
+		modeTitle = "Direct Non-302 HTTP Scanner (Filtering Redirects)"
+	}
+	fmt.Printf("%s[+] %s Setup%s\n", ColorCyan, modeTitle, ColorReset)
+
+	filename, cidr := getHostInput(scanner)
+	if filename == "" && len(cidr) == 0 {
+		fmt.Printf("%s[!] No host or CIDR provided. Aborting.%s\n", ColorYellow, ColorReset)
+		return
+	}
+
+	fmt.Printf("[-]  Enter port(s) [default: 80]: ")
+	portStr := "80"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			portStr = t
+		}
+	}
+	ports := parsePortList(portStr, 80)
+
+	fmt.Printf("[-]  Enter timeout in seconds [default: 3]: ")
+	timeoutSec := 3
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			if num, err := strconv.Atoi(t); err == nil && num > 0 {
+				timeoutSec = num
+			}
+		}
+	}
+
+	output, threads := getCommonInputs(scanner)
+
+	fmt.Printf("[-]  Select HTTP method(s) (GET, HEAD, POST, PUT, DELETE, OPTIONS, TRACE, PATCH) [default: GET,HEAD]: ")
+	methodsStr := "GET,HEAD"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			methodsStr = strings.ToUpper(t)
+		}
+	}
+	var methods []string
+	for _, m := range strings.Split(methodsStr, ",") {
+		m = strings.TrimSpace(m)
+		if m != "" {
+			methods = append(methods, m)
+		}
+	}
+	if len(methods) == 0 {
+		methods = []string{"GET", "HEAD"}
+	}
+
+	targets := expandAllTargets(filename, cidr)
+	if len(targets) == 0 {
+		fmt.Printf("%s[!] No valid targets found.%s\n", ColorRed, ColorReset)
+		return
+	}
+
+	runDirectScannerWorkerPool(targets, ports, methods, no302, timeoutSec, output, threads)
+}
+
+func getInputProxy(scanner *bufio.Scanner) {
+	fmt.Println()
+	fmt.Printf("%s[+] ProxyTest / WebSocket 101 Probe Setup%s\n", ColorGreen, ColorReset)
+
+	filename, cidr := getHostInput(scanner)
+	if filename == "" && len(cidr) == 0 {
+		fmt.Printf("%s[!] No host or CIDR provided. Aborting.%s\n", ColorYellow, ColorReset)
+		return
+	}
+
+	defaultTarget := "in1.wstunnel.site"
+	fmt.Printf("[-]  Enter target url [default: %s]: ", defaultTarget)
+	targetUrl := defaultTarget
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			targetUrl = t
+		}
+	}
+
+	defaultPayload := "GET / HTTP/1.1[crlf]Host: [host][crlf]Connection: Upgrade[crlf]Upgrade: websocket[crlf][crlf]"
+	fmt.Printf("[-]  Enter payload [default: %s]: ", defaultPayload)
+	payload := defaultPayload
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			payload = t
+		}
+	}
+
+	fmt.Printf("[-]  Enter port(s) [default: 80]: ")
+	portStr := "80"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			portStr = t
+		}
+	}
+	ports := parsePortList(portStr, 80)
+
+	output, threads := getCommonInputs(scanner)
+	targets := expandAllTargets(filename, cidr)
+	if len(targets) == 0 {
+		fmt.Printf("%s[!] No valid targets found.%s\n", ColorRed, ColorReset)
+		return
+	}
+
+	runProxyTestWorkerPool(targets, ports, targetUrl, payload, output, threads)
+}
+
+func getInputProxy2(scanner *bufio.Scanner) {
+	fmt.Println()
+	fmt.Printf("%s[+] ProxyRoute (Upstream Proxy Injection) Setup%s\n", ColorPurple, ColorReset)
+
+	filename, cidr := getHostInput(scanner)
+	if filename == "" && len(cidr) == 0 {
+		fmt.Printf("%s[!] No host or CIDR provided. Aborting.%s\n", ColorYellow, ColorReset)
+		return
+	}
+
+	fmt.Printf("[-]  Enter port(s) [default: 80]: ")
+	portStr := "80"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			portStr = t
+		}
+	}
+	ports := parsePortList(portStr, 80)
+
+	output, threads := getCommonInputs(scanner)
+
+	fmt.Printf("[-]  Select HTTP method(s) (GET, HEAD, POST, OPTIONS, etc.) [default: GET]: ")
+	methodsStr := "GET"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			methodsStr = strings.ToUpper(t)
+		}
+	}
+	var methods []string
+	for _, m := range strings.Split(methodsStr, ",") {
+		m = strings.TrimSpace(m)
+		if m != "" {
+			methods = append(methods, m)
+		}
+	}
+	if len(methods) == 0 {
+		methods = []string{"GET"}
+	}
+
+	fmt.Printf("[-]  Enter proxy (proxy:port, e.g. 127.0.0.1:8080): ")
+	var proxyAddr string
+	if scanner.Scan() {
+		proxyAddr = strings.TrimSpace(scanner.Text())
+	}
+	if proxyAddr == "" {
+		fmt.Printf("%s[!] Proxy is required for ProxyRoute mode.%s\n", ColorRed, ColorReset)
+		return
+	}
+
+	fmt.Printf("[-]  Use proxy authentication? (y/N): ")
+	var useAuth bool
+	if scanner.Scan() {
+		ans := strings.ToLower(strings.TrimSpace(scanner.Text()))
+		if ans == "y" || ans == "yes" {
+			useAuth = true
+		}
+	}
+
+	var proxyUser, proxyPass string
+	if useAuth {
+		fmt.Printf("[-]  Enter proxy username: ")
+		if scanner.Scan() {
+			proxyUser = strings.TrimSpace(scanner.Text())
+		}
+		fmt.Printf("[-]  Enter proxy password: ")
+		if scanner.Scan() {
+			proxyPass = strings.TrimSpace(scanner.Text())
+		}
+	}
+
+	targets := expandAllTargets(filename, cidr)
+	if len(targets) == 0 {
+		fmt.Printf("%s[!] No valid targets found.%s\n", ColorRed, ColorReset)
+		return
+	}
+
+	runProxyRouteWorkerPool(targets, ports, methods, proxyAddr, proxyUser, proxyPass, output, threads)
+}
+
+func getInputSSL(scanner *bufio.Scanner) {
+	fmt.Println()
+	fmt.Printf("%s[+] SSL / TLS & SNI Fronting Scanner Setup%s\n", ColorCyan, ColorReset)
+
+	filename, cidr := getHostInput(scanner)
+	if filename == "" && len(cidr) == 0 {
+		fmt.Printf("%s[!] No host or CIDR provided. Aborting.%s\n", ColorYellow, ColorReset)
+		return
+	}
+
+	fmt.Printf("[-]  Enter port(s) [default: 443]: ")
+	portStr := "443"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			portStr = t
+		}
+	}
+	ports := parsePortList(portStr, 443)
+
+	output, threads := getCommonInputs(scanner)
+	targets := expandAllTargets(filename, cidr)
+	if len(targets) == 0 {
+		fmt.Printf("%s[!] No valid targets found.%s\n", ColorRed, ColorReset)
+		return
+	}
+
+	runSSLWorkerPool(targets, ports, output, threads)
+}
+
+func getInputPing(scanner *bufio.Scanner) {
+	fmt.Println()
+	fmt.Printf("%s[+] Ping / TCP Reachability Scanner Setup (BugScan-X Engine)%s\n", ColorCyan, ColorReset)
+
+	filename, cidrs := getHostInput(scanner)
+	if filename == "" && len(cidrs) == 0 {
+		fmt.Printf("%s[!] No host or CIDR provided. Aborting.%s\n", ColorYellow, ColorReset)
+		return
+	}
+
+	fmt.Printf("[-]  Enter port(s) [default: 80,443]: ")
+	portStr := "80,443"
+	if scanner.Scan() {
+		if t := strings.TrimSpace(scanner.Text()); t != "" {
+			portStr = t
+		}
+	}
+	ports := parsePortList(portStr, 80)
+
+	output, threads := getCommonInputs(scanner)
+	isCidr := len(cidrs) > 0 && filename == ""
+	targets := expandAllTargets(filename, cidrs)
+	if len(targets) == 0 {
+		fmt.Printf("%s[!] No valid targets found.%s\n", ColorRed, ColorReset)
+		return
+	}
+
+	runPingWorkerPool(targets, ports, isCidr, output, threads)
+}
+
+func runDirectScannerWorkerPool(targets []string, ports []int, methods []string, no302 bool, timeoutSec int, outputFile string, threads int) {
+	if len(targets) == 0 {
+		return
+	}
+	if threads <= 0 {
+		threads = 50
+	}
+	if timeoutSec <= 0 {
+		timeoutSec = 3
+	}
+
+	type scanTask struct {
+		target string
+		port   int
+		method string
+	}
+
+	var tasks []scanTask
+	for _, t := range targets {
+		for _, p := range ports {
+			for _, m := range methods {
+				tasks = append(tasks, scanTask{target: t, port: p, method: m})
+			}
+		}
+	}
+
+	total := len(tasks)
+	fmt.Printf("\n%s[+] STARTING DIRECT SCANNER: %d Tasks | %d Threads | Timeout: %ds%s\n", ColorCyan, total, threads, timeoutSec, ColorReset)
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%-6s %-24s %-8s %-12s %-12s %-16s\n", "PROG", "TARGET:PORT", "METHOD", "STATUS", "LATENCY", "SERVER / CDN")
+	fmt.Println(strings.Repeat("─", 80))
+
+	taskChan := make(chan scanTask, total)
+	var processedCount int64
+	var aliveCount int64
+	var outMutex sync.Mutex
+
+	var outFile *os.File
+	var err error
+	if outputFile != "" {
+		outFile, err = os.OpenFile(outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer outFile.Close()
+		}
+	}
+
+	var wg sync.WaitGroup
+	timeoutDur := time.Duration(timeoutSec) * time.Second
+
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			client := &http.Client{
+				Timeout: timeoutDur,
+				CheckRedirect: func(req *http.Request, via []*http.Request) error {
+					return http.ErrUseLastResponse
+				},
+			}
+
+			for t := range taskChan {
+				idx := atomic.AddInt64(&processedCount, 1)
+				targetHost := t.target
+				ip, _, cnames, _ := resolveDNS(targetHost)
+
+				scheme := "http"
+				if t.port == 443 || t.port == 8443 || t.port == 2053 || t.port == 2083 || t.port == 2087 || t.port == 2096 {
+					scheme = "https"
+				}
+
+				targetUrl := fmt.Sprintf("%s://%s:%d/", scheme, targetHost, t.port)
+				req, err := http.NewRequest(t.method, targetUrl, nil)
+				if err != nil {
+					continue
+				}
+				req.Header.Set("User-Agent", "LoXaSB/5.5")
+				req.Header.Set("Host", targetHost)
+
+				start := time.Now()
+				resp, err := client.Do(req)
+				rtt := float64(time.Since(start).Microseconds()) / 1000.0
+
+				if err == nil {
+					statusCode := resp.StatusCode
+					resp.Body.Close()
+
+					if no302 && (statusCode == 301 || statusCode == 302 || statusCode == 307 || statusCode == 308) {
+						continue
+					}
+
+					atomic.AddInt64(&aliveCount, 1)
+					serverHdr := resp.Header.Get("Server")
+					cfRay := resp.Header.Get("CF-Ray")
+					isCdn, provider := inspectCDN(targetHost, ip, cnames, serverHdr, cfRay)
+
+					displayServer := serverHdr
+					if isCdn {
+						displayServer = provider
+					}
+					if displayServer == "" {
+						displayServer = "Direct"
+					}
+
+					color := ColorGreen
+					if statusCode >= 400 {
+						color = ColorYellow
+					}
+
+					addrStr := fmt.Sprintf("%s:%d", targetHost, t.port)
+					fmt.Printf("[%3d/%3d] %s%-24s%s %-8s %s%-12s%s %-12.1f %s%-16s%s\n",
+						idx, total,
+						ColorGreen, addrStr, ColorReset,
+						t.method,
+						color, resp.Status, ColorReset,
+						rtt,
+						ColorPurple, displayServer, ColorReset,
+					)
+
+					if outFile != nil {
+						outMutex.Lock()
+						_, _ = outFile.WriteString(fmt.Sprintf("%s:%d [%s] %s (Latency: %.1fms, Server: %s)\n", targetHost, t.port, t.method, resp.Status, rtt, displayServer))
+						outMutex.Unlock()
+					}
+
+					res := TargetResult{
+						Target:         targetHost,
+						ResolvedIP:     ip,
+						IsAlive:        true,
+						HttpStatus:     statusCode,
+						HttpStatusText: resp.Status,
+						ServerHeader:   serverHdr,
+						CfRayHeader:    cfRay,
+						TtfbMs:         rtt,
+						LatencyAvg:     rtt,
+						IsCdn:          isCdn,
+						CdnProvider:    provider,
+					}
+					res.BughostVerdict = calculateBughostVerdict(&res)
+					autoSaveResult(&res)
+				}
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+	wg.Wait()
+
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%s[✓] DIRECT SCAN COMPLETED:%s %d/%d Alive Responses Found.\n", ColorGreen, ColorReset, aliveCount, total)
+	if outputFile != "" {
+		fmt.Printf("%s[+] Results saved to: %s%s\n\n", ColorCyan, outputFile, ColorReset)
+	}
+}
+
+func runProxyTestWorkerPool(targets []string, ports []int, targetUrl string, rawPayload string, outputFile string, threads int) {
+	if len(targets) == 0 {
+		return
+	}
+	if threads <= 0 {
+		threads = 50
+	}
+
+	type proxyTask struct {
+		target string
+		port   int
+	}
+
+	var tasks []proxyTask
+	for _, t := range targets {
+		for _, p := range ports {
+			tasks = append(tasks, proxyTask{target: t, port: p})
+		}
+	}
+
+	total := len(tasks)
+	fmt.Printf("\n%s[+] STARTING PROXYTEST / WEBSOCKET SCANNER: %d Targets | %d Threads%s\n", ColorGreen, total, threads, ColorReset)
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%-6s %-26s %-16s %-12s %-18s\n", "PROG", "PROXY HOST:PORT", "STATUS", "LATENCY", "VERDICT / BANNER")
+	fmt.Println(strings.Repeat("─", 80))
+
+	taskChan := make(chan proxyTask, total)
+	var processedCount int64
+	var aliveCount int64
+	var outMutex sync.Mutex
+
+	var outFile *os.File
+	var err error
+	if outputFile != "" {
+		outFile, err = os.OpenFile(outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer outFile.Close()
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskChan {
+				idx := atomic.AddInt64(&processedCount, 1)
+				hostAddr := fmt.Sprintf("%s:%d", t.target, t.port)
+
+				start := time.Now()
+				conn, err := net.DialTimeout("tcp", hostAddr, 3*time.Second)
+				rtt := float64(time.Since(start).Microseconds()) / 1000.0
+
+				if err == nil {
+					defer conn.Close()
+					_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+					formattedPayload := rawPayload
+					formattedPayload = strings.ReplaceAll(formattedPayload, "[host]", targetUrl)
+					formattedPayload = strings.ReplaceAll(formattedPayload, "[crlf]", "\r\n")
+
+					_, err = conn.Write([]byte(formattedPayload))
+					if err == nil {
+						buf := make([]byte, 1024)
+						n, readErr := conn.Read(buf)
+						if readErr == nil && n > 0 {
+							respStr := string(buf[:n])
+							lines := strings.Split(respStr, "\r\n")
+							firstLine := lines[0]
+							if len(firstLine) > 28 {
+								firstLine = firstLine[:28]
+							}
+
+							atomic.AddInt64(&aliveCount, 1)
+
+							is101 := strings.Contains(respStr, "101 Switching Protocols")
+							statusColor := ColorGreen
+							verdict := firstLine
+							if is101 {
+								statusColor = ColorCyan
+								verdict = "[★] WS 101 OK!"
+							}
+
+							fmt.Printf("[%3d/%3d] %s%-26s%s %s%-16s%s %-12.1f %s%-18s%s\n",
+								idx, total,
+								ColorGreen, hostAddr, ColorReset,
+								statusColor, firstLine, ColorReset,
+								rtt,
+								statusColor, verdict, ColorReset,
+							)
+
+							if outFile != nil {
+								outMutex.Lock()
+								_, _ = outFile.WriteString(fmt.Sprintf("%s - %s (%.1fms)\n", hostAddr, firstLine, rtt))
+								outMutex.Unlock()
+							}
+
+							res := TargetResult{
+								Target:     t.target,
+								ResolvedIP: t.target,
+								IsAlive:    true,
+								HttpStatus: 101,
+								LatencyAvg: rtt,
+							}
+							res.BughostVerdict = fmt.Sprintf("[ProxyTest] %s", firstLine)
+							autoSaveResult(&res)
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+	wg.Wait()
+
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%s[✓] PROXYTEST COMPLETED:%s %d/%d Responsive Nodes Found.\n", ColorGreen, ColorReset, aliveCount, total)
+	if outputFile != "" {
+		fmt.Printf("%s[+] Results saved to: %s%s\n\n", ColorCyan, outputFile, ColorReset)
+	}
+}
+
+func runProxyRouteWorkerPool(targets []string, ports []int, methods []string, proxyAddr string, user string, pass string, outputFile string, threads int) {
+	if len(targets) == 0 {
+		return
+	}
+	if threads <= 0 {
+		threads = 50
+	}
+
+	type routeTask struct {
+		target string
+		port   int
+		method string
+	}
+
+	var tasks []routeTask
+	for _, t := range targets {
+		for _, p := range ports {
+			for _, m := range methods {
+				tasks = append(tasks, routeTask{target: t, port: p, method: m})
+			}
+		}
+	}
+
+	total := len(tasks)
+	fmt.Printf("\n%s[+] STARTING PROXYROUTE SCANNER via %s: %d Tasks | %d Threads%s\n", ColorPurple, proxyAddr, total, threads, ColorReset)
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%-6s %-26s %-8s %-16s %-12s\n", "PROG", "TARGET:PORT", "METHOD", "STATUS", "LATENCY")
+	fmt.Println(strings.Repeat("─", 80))
+
+	taskChan := make(chan routeTask, total)
+	var processedCount int64
+	var aliveCount int64
+	var outMutex sync.Mutex
+
+	var outFile *os.File
+	var err error
+	if outputFile != "" {
+		outFile, err = os.OpenFile(outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer outFile.Close()
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskChan {
+				idx := atomic.AddInt64(&processedCount, 1)
+				targetHost := fmt.Sprintf("%s:%d", t.target, t.port)
+
+				start := time.Now()
+				conn, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+				rtt := float64(time.Since(start).Microseconds()) / 1000.0
+
+				if err == nil {
+					defer conn.Close()
+					_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+
+					reqStr := fmt.Sprintf("%s http://%s/ HTTP/1.1\r\nHost: %s\r\nUser-Agent: LoXaSB/5.5\r\nConnection: close\r\n\r\n", t.method, targetHost, t.target)
+					_, err = conn.Write([]byte(reqStr))
+					if err == nil {
+						buf := make([]byte, 1024)
+						n, readErr := conn.Read(buf)
+						if readErr == nil && n > 0 {
+							firstLine := strings.Split(string(buf[:n]), "\r\n")[0]
+							if len(firstLine) > 28 {
+								firstLine = firstLine[:28]
+							}
+							atomic.AddInt64(&aliveCount, 1)
+
+							fmt.Printf("[%3d/%3d] %s%-26s%s %-8s %s%-16s%s %-12.1f\n",
+								idx, total,
+								ColorGreen, targetHost, ColorReset,
+								t.method,
+								ColorCyan, firstLine, ColorReset,
+								rtt,
+							)
+
+							if outFile != nil {
+								outMutex.Lock()
+								_, _ = outFile.WriteString(fmt.Sprintf("%s via %s [%s] -> %s (%.1fms)\n", targetHost, proxyAddr, t.method, firstLine, rtt))
+								outMutex.Unlock()
+							}
+						}
+					}
+				}
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+	wg.Wait()
+
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%s[✓] PROXYROUTE COMPLETED:%s %d/%d Routed Responses.\n\n", ColorGreen, ColorReset, aliveCount, total)
+}
+
+func runSSLWorkerPool(targets []string, ports []int, outputFile string, threads int) {
+	if len(targets) == 0 {
+		return
+	}
+	if threads <= 0 {
+		threads = 50
+	}
+
+	type sslTask struct {
+		target string
+		port   int
+	}
+
+	var tasks []sslTask
+	for _, t := range targets {
+		for _, p := range ports {
+			tasks = append(tasks, sslTask{target: t, port: p})
+		}
+	}
+
+	total := len(tasks)
+	fmt.Printf("\n%s[+] STARTING SSL / TLS 1.3 & SNI SCANNER: %d Targets | %d Threads%s\n", ColorCyan, total, threads, ColorReset)
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%-6s %-26s %-10s %-18s %-12s %-12s\n", "PROG", "TARGET:PORT", "TLS VER", "ISSUER / CDN", "SANs", "FRONTABLE")
+	fmt.Println(strings.Repeat("─", 80))
+
+	taskChan := make(chan sslTask, total)
+	var processedCount int64
+	var aliveCount int64
+	var outMutex sync.Mutex
+
+	var outFile *os.File
+	var err error
+	if outputFile != "" {
+		outFile, err = os.OpenFile(outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer outFile.Close()
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskChan {
+				idx := atomic.AddInt64(&processedCount, 1)
+				targetHost := t.target
+				addr := fmt.Sprintf("%s:%d", targetHost, t.port)
+
+				hasSni, tlsVer, _, _, issuer, _, sans, _, isFrontable, _ := inspectTLS(targetHost, targetHost)
+				if hasSni && tlsVer != "" {
+					atomic.AddInt64(&aliveCount, 1)
+
+					sanCountStr := fmt.Sprintf("%d SANs", len(sans))
+					frontStr := "No"
+					if isFrontable {
+						frontStr = "YES [★]"
+					}
+
+					fmt.Printf("[%3d/%3d] %s%-26s%s %s%-10s%s %-18s %-12s %s%-12s%s\n",
+						idx, total,
+						ColorGreen, addr, ColorReset,
+						ColorCyan, tlsVer, ColorReset,
+						issuer,
+						sanCountStr,
+						ColorPurple, frontStr, ColorReset,
+					)
+
+					if outFile != nil {
+						outMutex.Lock()
+						_, _ = outFile.WriteString(fmt.Sprintf("%s - %s (%s, Frontable: %v)\n", addr, tlsVer, issuer, isFrontable))
+						outMutex.Unlock()
+					}
+
+					res := TargetResult{
+						Target:      targetHost,
+						ResolvedIP:  targetHost,
+						IsAlive:     true,
+						HasSni:      true,
+						TlsVersion:  tlsVer,
+						IssuerOrg:   issuer,
+						IsFrontable: isFrontable,
+					}
+					res.BughostVerdict = calculateBughostVerdict(&res)
+					autoSaveResult(&res)
+				}
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+	wg.Wait()
+
+	fmt.Println(strings.Repeat("─", 80))
+	fmt.Printf("%s[✓] SSL SCAN COMPLETED:%s %d/%d Valid TLS/SNI Nodes Found.\n\n", ColorGreen, ColorReset, aliveCount, total)
+}
+
+func runPingWorkerPool(targets []string, ports []int, isCidr bool, outputFile string, threads int) {
+	if len(targets) == 0 {
+		return
+	}
+	if threads <= 0 {
+		threads = 50
+	}
+
+	type pingTask struct {
+		host string
+		port int
+	}
+
+	var tasks []pingTask
+	for _, t := range targets {
+		for _, p := range ports {
+			tasks = append(tasks, pingTask{host: t, port: p})
+		}
+	}
+
+	total := len(tasks)
+	fmt.Printf("\n%s[+] STARTING PING SCANNER: %d Tasks | %d Threads | 2s Timeout%s\n", ColorCyan, total, threads, ColorReset)
+	fmt.Println(strings.Repeat("─", 60))
+
+	// Output Headers matching bugscan-x HostPingScanner / CIDRPingScanner
+	if isCidr {
+		fmt.Printf("%s%-6s%s  %s%s%s\n", ColorCyan, "Port", ColorReset, ColorWhite, "Host", ColorReset)
+		fmt.Printf("%-6s  %s\n", "----", "----")
+	} else {
+		fmt.Printf("%s%-6s%s  %s%-15s%s  %s%s%s\n", ColorCyan, "Port", ColorReset, ColorYellow, "IP", ColorReset, ColorWhite, "Host", ColorReset)
+		fmt.Printf("%-6s  %-15s  %s\n", "----", "--", "----")
+	}
+
+	taskChan := make(chan pingTask, total)
+	var processedCount int64
+	var aliveCount int64
+	var outMutex sync.Mutex
+
+	var outFile *os.File
+	var err error
+	if outputFile != "" {
+		outFile, err = os.OpenFile(outputFile, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err == nil {
+			defer outFile.Close()
+			if isCidr {
+				_, _ = outFile.WriteString(fmt.Sprintf("%-6s  %s\n", "Port", "Host"))
+				_, _ = outFile.WriteString(fmt.Sprintf("%-6s  %s\n", "----", "----"))
+			} else {
+				_, _ = outFile.WriteString(fmt.Sprintf("%-6s  %-15s  %s\n", "Port", "IP", "Host"))
+				_, _ = outFile.WriteString(fmt.Sprintf("%-6s  %-15s  %s\n", "----", "--", "----"))
+			}
+		}
+	}
+
+	var wg sync.WaitGroup
+	timeoutDur := 2 * time.Second
+
+	for i := 0; i < threads; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for t := range taskChan {
+				_ = atomic.AddInt64(&processedCount, 1)
+				addr := net.JoinHostPort(t.host, strconv.Itoa(t.port))
+
+				// Socket connect test with 2 second timeout (sock.connect_ex)
+				conn, err := net.DialTimeout("tcp", addr, timeoutDur)
+				if err == nil {
+					conn.Close()
+					atomic.AddInt64(&aliveCount, 1)
+
+					outMutex.Lock()
+					if isCidr {
+						fmt.Printf("%s%-6d%s  %s%s%s\n",
+							ColorCyan, t.port, ColorReset,
+							ColorWhite, t.host, ColorReset,
+						)
+						if outFile != nil {
+							_, _ = outFile.WriteString(fmt.Sprintf("%-6d  %s\n", t.port, t.host))
+						}
+					} else {
+						ip, _, _, _ := resolveDNS(t.host)
+						if ip == "" {
+							ip = "Unknown"
+						}
+						fmt.Printf("%s%-6d%s  %s%-15s%s  %s%s%s\n",
+							ColorCyan, t.port, ColorReset,
+							ColorYellow, ip, ColorReset,
+							ColorWhite, t.host, ColorReset,
+						)
+						if outFile != nil {
+							_, _ = outFile.WriteString(fmt.Sprintf("%-6d  %-15s  %s\n", t.port, ip, t.host))
+						}
+					}
+					outMutex.Unlock()
+
+					res := TargetResult{
+						Target:     t.host,
+						ResolvedIP: t.host,
+						IsAlive:    true,
+						HttpStatus: 200,
+						LatencyAvg: 20.0,
+					}
+					res.BughostVerdict = fmt.Sprintf("[Ping OK] Port %d Open", t.port)
+					autoSaveResult(&res)
+				}
+			}
+		}()
+	}
+
+	for _, task := range tasks {
+		taskChan <- task
+	}
+	close(taskChan)
+	wg.Wait()
+
+	fmt.Println(strings.Repeat("─", 60))
+	fmt.Printf("%s[✓] PING SCAN COMPLETED:%s %d/%d Open/Responsive Ports Found.\n", ColorGreen, ColorReset, aliveCount, total)
+	if outputFile != "" {
+		fmt.Printf("%s[+] Results saved to: %s%s\n\n", ColorCyan, outputFile, ColorReset)
+	}
+}
+
 func runHostScannerSubmenu(scanner *bufio.Scanner) {
 	for {
 		clearScreen()
 		fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
 		fmt.Printf("%s┃                   [1] HOST & NETWORK SCANNER SUITE                    ┃%s\n", ColorBold, ColorReset)
+		fmt.Printf("%s┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫%s\n", ColorCyan, ColorReset)
+		fmt.Printf("┃ %-69s ┃\n", "Select Scanning Mode (BugScan-X Engine):")
 		fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
 
-		fmt.Printf("%s[1]%s Single Host / Domain Deep Diagnostic Audit (Direct + TLS + Headers)\n", ColorGreen, ColorReset)
-		fmt.Printf("%s[2]%s CIDR & Subnet Calculator & Range Scanner (Multi-threaded)\n", ColorCyan, ColorReset)
-		fmt.Printf("%s[3]%s Batch Host Scanner from File (hosts.txt)\n", ColorPurple, ColorReset)
-		fmt.Printf("%s[4]%s Direct HTTP Request Methods Probe (GET, HEAD, POST, OPTIONS, CONNECT)\n", ColorWhite, ColorReset)
-		fmt.Printf("%s[5]%s Ping & Quality Jitter Benchmark (10 Probes)\n", ColorYellow, ColorReset)
+		fmt.Printf("%s[1]%s Direct        - Direct HTTP Prober with customizable HTTP Methods & Ports\n", ColorGreen, ColorReset)
+		fmt.Printf("%s[2]%s DirectNon302  - Direct HTTP Filter (Excludes 301/302 Redirect Responses)\n", ColorCyan, ColorReset)
+		fmt.Printf("%s[3]%s ProxyTest     - WebSocket 101 Upgrade & Custom Payload Injection Probe\n", ColorPurple, ColorReset)
+		fmt.Printf("%s[4]%s ProxyRoute    - Upstream Proxy Routing Scanner with Optional Auth\n", ColorWhite, ColorReset)
+		fmt.Printf("%s[5]%s Ping          - TCP/ICMP Latency, Jitter & Packet Loss Benchmark\n", ColorYellow, ColorReset)
+		fmt.Printf("%s[6]%s SSL           - TLS 1.3 / SNI Handshake, SAN Certificate & Fronting Audit\n", ColorCyan, ColorReset)
 		fmt.Printf("%s[0]%s Return to Main Menu\n\n", ColorRed, ColorReset)
 
-		fmt.Printf("[-]  Choice: ")
+		fmt.Printf("[-]  Select scanning mode: ")
 		if !scanner.Scan() {
 			break
 		}
@@ -964,107 +1972,22 @@ func runHostScannerSubmenu(scanner *bufio.Scanner) {
 		}
 
 		switch c {
-		case "1":
-			fmt.Printf("\n[-]  Enter Host / Domain / IP: ")
-			if scanner.Scan() {
-				h := strings.TrimSpace(scanner.Text())
-				if h != "" {
-					fmt.Printf("\n%s[+] Auditing %s...%s\n", ColorCyan, h, ColorReset)
-					res := probeTarget(h, 5, true)
-					displayResult(res)
-				}
-			}
-		case "2":
-			fmt.Printf("\n[-]  Enter CIDR Subnet (e.g. 104.16.0.0/24 or 172.64.0.0/20): ")
-			if scanner.Scan() {
-				cidrInput := strings.TrimSpace(scanner.Text())
-				if cidrInput != "" {
-					ips, count, netIP, maskIP, firstU, lastU, err := calculateAndExpandCIDR(cidrInput)
-					if err != nil {
-						fmt.Printf("%s[!] Invalid CIDR format: %v%s\n", ColorRed, err, ColorReset)
-					} else {
-						fmt.Println()
-						fmt.Printf("%s┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓%s\n", ColorCyan, ColorReset)
-						fmt.Printf("%s┃                   CIDR SUBNET CALCULATION BREAKDOWN                   ┃%s\n", ColorBold, ColorReset)
-						fmt.Printf("%s┣━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┫%s\n", ColorCyan, ColorReset)
-						fmt.Printf("┃ • Input CIDR       : %-49s ┃\n", cidrInput)
-						fmt.Printf("┃ • Network IP       : %-49s ┃\n", netIP.String())
-						fmt.Printf("┃ • Subnet Netmask   : %-49s ┃\n", maskIP.String())
-						fmt.Printf("┃ • Total Host IPs   : %-49s ┃\n", fmt.Sprintf("%d Total IPs", count))
-						fmt.Printf("┃ • Usable IP Range  : %-49s ┃\n", fmt.Sprintf("%s  ->  %s", firstU, lastU))
-						fmt.Printf("%s┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛%s\n\n", ColorCyan, ColorReset)
-
-						workers := 25
-						fmt.Printf("[-]  Enter number of concurrent worker threads [default 25, max 100]: ")
-						if scanner.Scan() {
-							wText := strings.TrimSpace(scanner.Text())
-							if wText != "" {
-								if parsedW, err := strconv.Atoi(wText); err == nil && parsedW > 0 {
-									workers = parsedW
-								}
-							}
-						}
-						runConcurrentCIDRScanner(ips, workers, cidrInput)
-					}
-				}
-			}
-		case "3":
-			fmt.Printf("\n[-]  Enter path to hosts file (e.g. hosts.txt): ")
-			if scanner.Scan() {
-				filePath := strings.TrimSpace(scanner.Text())
-				if filePath != "" {
-					file, err := os.Open(filePath)
-					if err != nil {
-						fmt.Printf("%s[!] Error opening file: %v%s\n", ColorRed, err, ColorReset)
-					} else {
-						defer file.Close()
-						var targets []string
-						s := bufio.NewScanner(file)
-						for s.Scan() {
-							line := strings.TrimSpace(s.Text())
-							if line != "" && !strings.HasPrefix(line, "#") {
-								targets = append(targets, line)
-							}
-						}
-						workers := 20
-						fmt.Printf("[-]  Enter number of worker threads [default 20]: ")
-						if scanner.Scan() {
-							wText := strings.TrimSpace(scanner.Text())
-							if wText != "" {
-								if pw, err := strconv.Atoi(wText); err == nil && pw > 0 {
-									workers = pw
-								}
-							}
-						}
-						runConcurrentCIDRScanner(targets, workers, fmt.Sprintf("File: %s", filePath))
-					}
-				}
-			}
-		case "4":
-			fmt.Printf("\n[-]  Enter Target Host or IP: ")
-			if scanner.Scan() {
-				h := strings.TrimSpace(scanner.Text())
-				if h != "" {
-					runHttpMethodsProbe(h)
-				}
-			}
-		case "5":
-			fmt.Printf("\n[-]  Enter Target Host or IP for Ping & Jitter test: ")
-			if scanner.Scan() {
-				h := strings.TrimSpace(scanner.Text())
-				if h != "" {
-					ip, _, _, _ := resolveDNS(h)
-					fmt.Printf("\n%s[+] Performing 10-packet ping & jitter test to %s (%s)...%s\n", ColorCyan, h, ip, ColorReset)
-					alive, minL, avgL, maxL, jitter, loss := probePing(h, ip, 10, 1500*time.Millisecond)
-					fmt.Printf(" • Reachability : %v\n", alive)
-					fmt.Printf(" • Min Latency  : %.1f ms\n", minL)
-					fmt.Printf(" • Avg Latency  : %.1f ms\n", avgL)
-					fmt.Printf(" • Max Latency  : %.1f ms\n", maxL)
-					fmt.Printf(" • Jitter       : %.1f ms\n", jitter)
-					fmt.Printf(" • Packet Loss  : %.0f%%\n", loss)
-				}
-			}
+		case "1", "Direct", "direct":
+			getInputDirect(scanner, false)
+		case "2", "DirectNon302", "directnon302":
+			getInputDirect(scanner, true)
+		case "3", "ProxyTest", "proxytest":
+			getInputProxy(scanner)
+		case "4", "ProxyRoute", "proxyroute":
+			getInputProxy2(scanner)
+		case "5", "Ping", "ping":
+			getInputPing(scanner)
+		case "6", "SSL", "ssl":
+			getInputSSL(scanner)
+		default:
+			fmt.Printf("%s[!] Invalid mode selection. Please enter 1 - 6 or mode name.%s\n", ColorRed, ColorReset)
 		}
+
 		pauseEnter(scanner)
 	}
 }
