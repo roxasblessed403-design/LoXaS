@@ -18,6 +18,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"flag"
@@ -348,7 +349,7 @@ func inspectHttpDeep(target string, ip string) (int, string, string, string, str
 		transport := &http.Transport{
 			TLSClientConfig:   &tls.Config{InsecureSkipVerify: true, ServerName: target},
 			DisableKeepAlives: true,
-			DialContext: func(ctx net.Context, network, addr string) (net.Conn, error) {
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 				port := "443"
 				if scheme == "http" {
 					port = "80"
@@ -783,7 +784,7 @@ func calculateAndExpandCIDR(cidrStr string) ([]string, int, net.IP, net.IP, stri
 		clean = clean + "/24"
 	}
 
-	ip, ipNet, err := net.ParseCIDR(clean)
+	_, ipNet, err := net.ParseCIDR(clean)
 	if err != nil {
 		return nil, 0, nil, nil, "", "", err
 	}
@@ -1801,7 +1802,7 @@ func runSSLWorkerPool(targets []string, ports []int, outputFile string, threads 
 						IsAlive:     true,
 						HasSni:      true,
 						TlsVersion:  tlsVer,
-						IssuerOrg:   issuer,
+						CertIssuer:  issuer,
 						IsFrontable: isFrontable,
 					}
 					res.BughostVerdict = calculateBughostVerdict(&res)
