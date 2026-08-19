@@ -248,55 +248,64 @@ func probePing(host string, ip string, count int, timeout time.Duration) (bool, 
 
 // Inspect TLS / SNI Certificate deeply
 func inspectTLS(target string, ip string) (bool, string, string, string, string, int, []string, []string, bool, float64) {
-	conf := &tls.Config{
-		ServerName:         target,
-		InsecureSkipVerify: true,
-		NextProtos:         []string{"h2", "http/1.1"},
+	serverNames := []string{target}
+	if net.ParseIP(target) != nil {
+		serverNames = []string{"", target, "cloudflare.com"}
+	} else {
+		serverNames = append(serverNames, "")
 	}
 
 	addr := fmt.Sprintf("%s:443", ip)
 	dialer := &net.Dialer{Timeout: 3000 * time.Millisecond}
 
-	start := time.Now()
-	conn, err := tls.DialWithDialer(dialer, "tcp", addr, conf)
-	tlsDuration := float64(time.Since(start).Microseconds()) / 1000.0
-
-	if err != nil {
-		return false, "None", "None", "", "", 0, nil, nil, false, tlsDuration
-	}
-	defer conn.Close()
-
-	state := conn.ConnectionState()
-	tlsVer := "TLS 1.2"
-	if state.Version == tls.VersionTLS13 {
-		tlsVer = "TLS 1.3"
-	}
-	cipherName := tls.CipherSuiteName(state.CipherSuite)
-
-	var alpn []string
-	if state.NegotiatedProtocol != "" {
-		alpn = append(alpn, state.NegotiatedProtocol)
-	}
-
-	isFrontable := len(alpn) > 0 || state.Version == tls.VersionTLS13
-
-	var subjectCN, issuerOrg string
-	var daysLeft int
-	var sans []string
-
-	if len(state.PeerCertificates) > 0 {
-		cert := state.PeerCertificates[0]
-		subjectCN = cert.Subject.CommonName
-		if len(cert.Issuer.Organization) > 0 {
-			issuerOrg = cert.Issuer.Organization[0]
-		} else {
-			issuerOrg = cert.Issuer.CommonName
+	for _, sni := range serverNames {
+		conf := &tls.Config{
+			ServerName:         sni,
+			InsecureSkipVerify: true,
+			NextProtos:         []string{"h2", "http/1.1"},
 		}
-		daysLeft = int(time.Until(cert.NotAfter).Hours() / 24)
-		sans = cert.DNSNames
+
+		start := time.Now()
+		conn, err := tls.DialWithDialer(dialer, "tcp", addr, conf)
+		tlsDuration := float64(time.Since(start).Microseconds()) / 1000.0
+
+		if err == nil {
+			defer conn.Close()
+			state := conn.ConnectionState()
+			tlsVer := "TLS 1.2"
+			if state.Version == tls.VersionTLS13 {
+				tlsVer = "TLS 1.3"
+			}
+			cipherName := tls.CipherSuiteName(state.CipherSuite)
+
+			var alpn []string
+			if state.NegotiatedProtocol != "" {
+				alpn = append(alpn, state.NegotiatedProtocol)
+			}
+
+			isFrontable := len(alpn) > 0 || state.Version == tls.VersionTLS13
+
+			var subjectCN, issuerOrg string
+			var daysLeft int
+			var sans []string
+
+			if len(state.PeerCertificates) > 0 {
+				cert := state.PeerCertificates[0]
+				subjectCN = cert.Subject.CommonName
+				if len(cert.Issuer.Organization) > 0 {
+					issuerOrg = cert.Issuer.Organization[0]
+				} else {
+					issuerOrg = cert.Issuer.CommonName
+				}
+				daysLeft = int(time.Until(cert.NotAfter).Hours() / 24)
+				sans = cert.DNSNames
+			}
+
+			return true, tlsVer, cipherName, subjectCN, issuerOrg, daysLeft, sans, alpn, isFrontable, tlsDuration
+		}
 	}
 
-	return true, tlsVer, cipherName, subjectCN, issuerOrg, daysLeft, sans, alpn, isFrontable, tlsDuration
+	return false, "None", "None", "", "", 0, nil, nil, false, 0
 }
 
 // Deep HTTP Inspection: status, server, headers, TTFB
@@ -352,8 +361,50 @@ func inspectHttpDeep(target string, ip string) (int, string, string, string, str
 	return 0, "No Response / Timed Out", "", "", "", "", "", 0, 0
 }
 
+var cloudflareCIDRs = []string{
+	"173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22",
+	"141.101.64.0/18", "108.162.192.0/18", "190.93.240.0/20", "188.114.96.0/20",
+	"197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/12",
+	"172.64.0.0/13", "131.0.72.0/22",
+}
+
+var cloudfrontCIDRs = []string{
+	"13.32.0.0/15", "13.35.0.0/16", "13.224.0.0/14", "18.64.0.0/14",
+	"52.84.0.0/15", "54.192.0.0/16", "54.230.0.0/16", "99.84.0.0/16",
+	"99.86.0.0/16", "143.204.0.0/16", "204.246.160.0/19", "205.251.192.0/19",
+}
+
+var fastlyCIDRs = []string{
+	"151.101.0.0/16", "199.232.0.0/16",
+}
+
+func ipInCIDRList(ipStr string, cidrList []string) bool {
+	parsedIP := net.ParseIP(ipStr)
+	if parsedIP == nil {
+		return false
+	}
+	for _, cidr := range cidrList {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err == nil && ipNet.Contains(parsedIP) {
+			return true
+		}
+	}
+	return false
+}
+
 // Identify CDN Provider
 func inspectCDN(target string, ip string, cnames []string, serverHdr string, cfRay string) (bool, string) {
+	// First check direct IP ASN / Subnet Ranges
+	if ipInCIDRList(ip, cloudflareCIDRs) {
+		return true, "Cloudflare"
+	}
+	if ipInCIDRList(ip, cloudfrontCIDRs) {
+		return true, "CloudFront"
+	}
+	if ipInCIDRList(ip, fastlyCIDRs) {
+		return true, "Fastly"
+	}
+
 	for _, sig := range knownCdns {
 		for _, cn := range sig.Cnames {
 			for _, userCn := range cnames {
